@@ -107,6 +107,56 @@ before trusting the exit code.
 `scripts/fetch-types.ps1` from the official luau-lsp repository. A fresh clone must run
 that once before analysing.
 
+## Studio API access is required to test saving
+
+**Game Settings → Security → Enable Studio Access to API Services.**
+
+Without it every `UpdateAsync` returns `403` and `DataService` falls back to a
+non-persistent in-memory store, which cannot test persistence at all. The fallback warns
+loudly rather than pretending to save.
+
+This is safe to leave on. `EnvironmentConfig` resolves Studio to `Development`, so Studio
+writes to `IceMelt_PlayerData_DEV_v1` and physically cannot reach the production store.
+
+### Session locks in Studio
+
+Profiles carry a session lock so two servers cannot overwrite each other. In Studio the
+lock identity is stable per place, so stopping and restarting play reclaims your own lock
+immediately instead of locking you out for the 150-second timeout.
+
+If a Studio session ever refuses to load with "Your save is still in use by another
+server", clear the lock from the command bar (Server context):
+
+```
+local store = game:GetService("DataStoreService"):GetDataStore("IceMelt_PlayerData_DEV_v1")
+store:UpdateAsync("Player_" .. YOUR_USER_ID, function(stored)
+    stored.Lock = nil
+    return stored
+end)
+```
+
+### Dev commands
+
+`DevCommandService` publishes a BindableFunction at `ServerStorage.IceMelt.DevCommands` in
+Development and Test only. It is not a remote, and ServerStorage does not replicate, so no
+client can reach it. From the command bar in **Server** context:
+
+```
+local dev = game.ServerStorage.IceMelt.DevCommands
+dev:Invoke("help")
+dev:Invoke("backend")
+dev:Invoke("get", USER_ID)
+dev:Invoke("setHeat", USER_ID, 5000)
+dev:Invoke("save", USER_ID)
+dev:Invoke("rejoin", USER_ID)     -- save, release lock, load again
+dev:Invoke("loadOnly", USER_ID)   -- load without saving first
+dev:Invoke("reset", USER_ID)
+dev:Invoke("testRepair")
+```
+
+Use `rejoin` to test that a mutation survives a round trip. Use `loadOnly` when the stored
+record itself is what you are testing, because `rejoin` saves over it first.
+
 ## Studio MCP
 
 Available and used in Phase 00 for: DataModel inspection, Edit/Server Luau execution,

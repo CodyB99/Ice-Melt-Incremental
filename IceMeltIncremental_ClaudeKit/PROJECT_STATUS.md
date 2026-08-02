@@ -6,7 +6,7 @@ Updated: 2026-08-02
 
 - [x] 00 — Repository, Rojo, Studio MCP, and DataModel setup
 - [x] 01 — Shared types, configuration, remotes, and bootstrapping
-- [ ] 02 — Player data, session safety, and replicated state
+- [x] 02 — Player data, session safety, and replicated state
 - [ ] 03 — Ice fields, server-authoritative melt loop, and pooling
 - [ ] 04 — Heat economy, upgrades, tool progression, and number formatting
 - [ ] 05 — Three zones, gates, world construction, and travel
@@ -107,6 +107,47 @@ Bug found and fixed during this phase: the handshake was a single fire-and-forge
 would drop it silently and leave the client with no state forever. It now retries a bounded
 4 times at 0.75s and warns if it gives up; the server's rate limit was widened to match.
 
+### Phase 02 evidence
+
+Run 2026-08-02 against the real DataStore, with Studio API access enabled.
+Backend reported at runtime: `DataStore(IceMelt_PlayerData_DEV_v1) persistent=true
+environment=Development`.
+
+| Phase | Command / test | Result |
+|---|---|---|
+| 02 | `stylua`, `selene`, `rojo build`, `luau-lsp analyze` | **Pass**, all exit 0 |
+| 02 | New player defaults | **Pass** — SchemaVersion 1, Heat/Embers/Thaws 0, all seven upgrades 0, tool 1/1, Backyard unlocked, City locked, LoadStatus `Loaded` |
+| 02 | Mutation survives save → release → load | **Pass** — Heat 12345 round-tripped intact |
+| 02 | Mutation survives a full Studio session restart | **Pass** — Heat 777 written in one play session, read back in a later one |
+| 02 | Two sessions cannot silently overwrite | **Pass** — with a foreign fresh lock planted, `save` returned false, stored Heat stayed 4242 despite the live profile holding 999999, and the foreign lock was left intact |
+| 02 | Stale lock from a crashed server is reclaimable | **Pass** — a lock backdated 3600s was reclaimed and the load succeeded |
+| 02 | Profile from a newer build is refused, not downgraded | **Pass** — status `Incompatible`; SchemaVersion 99, Heat 31337, and an unknown `SomeFutureField` all survived untouched, and the lock was never claimed |
+| 02 | Invalid fields repaired and logged | **Pass** — 23 repairs from a deliberately corrupt profile: NaN Heat, negative LifetimeHeat, infinite Embers, fractional Thaws, string upgrade level, out-of-range Crit, unknown zone `Atlantis`, unknown discovery, negative discovery count, string ReceiptHistory, EquippedTool above HighestTool. A valid FrozenCoin count was preserved |
+| 02 | Full profile never replicates | **Pass** — client snapshot has exactly the 8 allow-listed keys; ReceiptHistory, LifetimeHeat, RunHeat, RewardState, Settings, Discoveries, and SchemaVersion all absent |
+| 02 | Dev commands unreachable from a client | **Pass** — ServerStorage shows 0 children client-side; the entry point is a BindableFunction, not a remote |
+| 02 | No production store touched in Studio | **Pass** — resolved store was `IceMelt_PlayerData_DEV_v1` throughout |
+
+Three bugs found and fixed during this phase:
+
+1. **`DataService.Init` yielded.** It resolved the storage backend, which probes DataStore.
+   The Phase 01 Init-yield detector caught it, and the consequence was real: startup
+   continued before the backend existed, so the first player's load ran against a nil
+   backend, failed, and kicked them. Backend resolution moved to `Start`.
+2. **Studio play sessions locked the developer out of their own profile.** `game.JobId` is
+   empty in Studio, and the synthetic id was derived from `os.time()`, so every restart
+   looked like a different server holding the lock. Restarting within the 150s lock
+   timeout produced a kick. The Studio id is now stable per place, so a restarted session
+   reclaims its own lock.
+3. **A newer-schema profile would have been silently downgraded.** `migrate` refused to
+   downgrade, but `repair` still ran and would have stripped unknown fields, and the next
+   save would have written that stripped copy back. The refusal now propagates out of
+   `normalise` and aborts the load with status `Incompatible`.
+
+Also fixed: `BindToClose` counted outstanding saves inside its spawn loop, so an
+early-finishing release could fire the completion signal before the rest were queued.
+Players are counted first now. And a brand-new player no longer logs a spurious "profile
+was nil, replaced with defaults" repair, which would bury real corruption in join noise.
+
 ## Acceptance criteria — Phase 00
 
 | Criterion | Status |
@@ -145,12 +186,23 @@ would drop it silently and leave the client with no state forever. It now retrie
 | Start order logged once in development, no untimed race waits | **Met** — one line per side; every `WaitForChild` has a timeout; `Init` yielding is detected rather than tolerated |
 | Build/play test has no red errors | **Met** |
 
+## Acceptance criteria — Phase 02
+
+| Criterion | Status |
+|---|---|
+| New player gets correct defaults | **Met** |
+| Leave/rejoin preserves a test mutation | **Met** — verified both by save/release/load round trip and across a full Studio session restart |
+| Two sessions cannot silently overwrite the same profile | **Met** — the losing save writes nothing and says so |
+| Invalid fields are repaired and logged | **Met** — 23 distinct repairs exercised |
+| Full profile and receipt history never replicate to clients | **Met** — allow-listed snapshot, verified on the wire |
+| No production store is touched in Studio | **Met** |
+
 ## Next action
 
-Run Phase 02 — persistence and player state.
+Run Phase 03 — ice field and the melt vertical slice.
 
-Phase 02 must preserve: the `EnvironmentConfig` production guard, server-created runtime
-containers, the closed remote schema, and one development-only startup line per bootstrap.
-`PlayerStateService` currently serves in-memory defaults; Phase 02 replaces those with
-profiles loaded through `DataService` while keeping the module's public shape
-(`getState` returning a copy, and clients never receiving a profile).
+Phase 03 must preserve: the `EnvironmentConfig` production guard, the closed remote schema,
+one development-only startup line per bootstrap, and `Init` never yielding. Gate all
+gameplay on `DataService.isLoaded(player)`; a melt reward granted before the profile loads
+would be written over on the next save. Grant Heat only through
+`PlayerStateService.addHeat`, never by touching a profile table directly.

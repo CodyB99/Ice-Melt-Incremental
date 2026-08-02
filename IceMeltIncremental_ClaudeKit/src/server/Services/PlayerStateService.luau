@@ -3,16 +3,21 @@
 --[[
 	PlayerStateService
 
-	Phase 01 scope: the join handshake and a state-ready signal. No persistence, no
-	economy, no gameplay — Phase 02 replaces the in-memory defaults with real profiles
-	loaded through DataService, keeping this module's public shape.
+	The only gateway to player state for the rest of the server, and the only thing that
+	replicates state to clients.
 
-	What it already gets right, so Phase 02 inherits it rather than retrofitting it:
-	  * Clients receive a ReplicatedPlayerState, never a profile. ReceiptHistory and every
-	    anti-exploit counter stay server-side by construction.
-	  * getState returns a copy. A caller cannot mutate another player's state by holding
-	    onto the table it was handed.
-	  * ClientReady is rate-limited per player and idempotent, so replaying it does nothing.
+	Two rules it enforces:
+
+	1. No mutable profile table ever leaves this module. Getters return primitives or
+	   copies, so a caller cannot hold a reference and mutate a player's saved data from
+	   somewhere else. Mutations are explicit, named, validated, and clamped.
+
+	2. Clients receive a ReplicatedPlayerState and nothing else. ReceiptHistory,
+	   LifetimeHeat, RunHeat, RewardState, and every anti-exploit counter stay server-side
+	   by construction rather than by remembering to strip them.
+
+	Replication is throttled: a burst of mutations produces one snapshot on the next tick
+	instead of one remote per change.
 ]]
 
 local Players = game:GetService("Players")
@@ -22,112 +27,323 @@ local Shared = ReplicatedStorage:WaitForChild("IceMelt", 10):WaitForChild("Share
 local ConfigFolder = Shared:WaitForChild("Config", 10)
 local UtilFolder = Shared:WaitForChild("Util", 10)
 
+local BalanceConfig = require(ConfigFolder:WaitForChild("BalanceConfig", 10))
 local ContentConfig = require(ConfigFolder:WaitForChild("ContentConfig", 10))
+local GameConfig = require(ConfigFolder:WaitForChild("GameConfig", 10))
 local RemoteNames = require(ConfigFolder:WaitForChild("RemoteNames", 10))
 local Types = require(Shared:WaitForChild("Types", 10))
 local Validate = require(UtilFolder:WaitForChild("Validate", 10))
 
+local ServerRoot = script.Parent.Parent
 local RemoteRegistry =
-	require(script.Parent.Parent:WaitForChild("Runtime", 10):WaitForChild("RemoteRegistry", 10))
+	require(ServerRoot:WaitForChild("Runtime", 10):WaitForChild("RemoteRegistry", 10))
+local DataService = require(script.Parent:WaitForChild("DataService", 10))
 
+type PlayerProfile = Types.PlayerProfile
 type ReplicatedPlayerState = Types.ReplicatedPlayerState
 
 local PlayerStateService = {
 	Name = "PlayerStateService",
-	-- Runs early: later services will read state during their own Init.
+	-- After DataService, before anything that reads state.
 	Priority = 10,
 }
 
-local states: { [Player]: ReplicatedPlayerState } = {}
+local REPLICATION_INTERVAL = 0.1
+
 local readyPlayers: { [Player]: boolean } = {}
 local readyBuckets: { [Player]: Validate.TokenBucket } = {}
+local pendingPush: { [Player]: boolean } = {}
 
-local function defaultState(): ReplicatedPlayerState
-	local unlockedZones: { [string]: boolean } = {}
-	unlockedZones[ContentConfig.StartingZone] = true
+-- === Snapshot ==============================================================
 
-	return {
-		Heat = 0,
-		Embers = 0,
-		Thaws = 0,
-		Upgrades = { Power = 0, Radius = 0, Value = 0, Speed = 0, Crit = 0, Luck = 0, Auto = 0 },
-		HighestTool = ContentConfig.StartingToolIndex,
-		EquippedTool = ContentConfig.StartingToolIndex,
-		UnlockedZones = unlockedZones,
-		DiscoveryCount = 0,
-	}
+local function countDiscoveries(profile: PlayerProfile): number
+	local total = 0
+	for _ in profile.Discoveries do
+		total += 1
+	end
+	return total
 end
 
 --[[
-	Deep-ish copy. The nested tables are the only mutable parts of the snapshot, so copying
-	them is enough to stop a caller mutating the authoritative table.
+	Builds the client-facing view. This is an allow-list: every field is named explicitly,
+	so adding a field to the profile cannot accidentally start replicating it.
 ]]
-local function copyState(state: ReplicatedPlayerState): ReplicatedPlayerState
+local function buildSnapshot(profile: PlayerProfile): ReplicatedPlayerState
 	return {
-		Heat = state.Heat,
-		Embers = state.Embers,
-		Thaws = state.Thaws,
-		Upgrades = table.clone(state.Upgrades),
-		HighestTool = state.HighestTool,
-		EquippedTool = state.EquippedTool,
-		UnlockedZones = table.clone(state.UnlockedZones),
-		DiscoveryCount = state.DiscoveryCount,
+		Heat = profile.Heat,
+		Embers = profile.Embers,
+		Thaws = profile.Thaws,
+		Upgrades = table.clone(profile.Upgrades),
+		HighestTool = profile.HighestTool,
+		EquippedTool = profile.EquippedTool,
+		UnlockedZones = table.clone(profile.UnlockedZones),
+		DiscoveryCount = countDiscoveries(profile),
 	}
 end
 
-function PlayerStateService.getState(player: Player): ReplicatedPlayerState?
-	local state = states[player]
-	if not state then
+function PlayerStateService.getSnapshot(player: Player): ReplicatedPlayerState?
+	local profile = DataService.getProfile(player)
+	if not profile then
 		return nil
 	end
-	return copyState(state)
+	return buildSnapshot(profile)
 end
 
 function PlayerStateService.isReady(player: Player): boolean
-	return readyPlayers[player] == true
+	return DataService.isLoaded(player) and readyPlayers[player] == true
 end
 
 --[[
-	Pushes the current snapshot to its owner. Only ever sent to the player it describes.
+	Queues a replication. Coalesced, so twenty mutations in one frame send one snapshot.
 ]]
+function PlayerStateService.queuePush(player: Player)
+	if DataService.isLoaded(player) then
+		pendingPush[player] = true
+	end
+end
+
 function PlayerStateService.push(player: Player)
-	local state = states[player]
-	if not state then
+	local snapshot = PlayerStateService.getSnapshot(player)
+	if not snapshot then
 		return
 	end
-	RemoteRegistry.fireClient(RemoteNames.Name.PlayerState, player, copyState(state))
+	pendingPush[player] = nil
+	RemoteRegistry.fireClient(RemoteNames.Name.PlayerState, player, snapshot)
 end
 
-local function onPlayerAdded(player: Player)
-	states[player] = defaultState()
-	-- Sized for the client's bounded handshake retry (4 attempts, 0.75s apart) plus a
-	-- rejoin, while still throttling a client that spams the channel.
-	readyBuckets[player] = Validate.newTokenBucket(3, 0.5, os.clock())
+-- === Getters ===============================================================
+-- Primitives and copies only. Nothing here hands out a live table.
+
+function PlayerStateService.getHeat(player: Player): number
+	local profile = DataService.getProfile(player)
+	return if profile then profile.Heat else 0
 end
 
-local function onPlayerRemoving(player: Player)
-	states[player] = nil
-	readyPlayers[player] = nil
-	readyBuckets[player] = nil
+function PlayerStateService.getEmbers(player: Player): number
+	local profile = DataService.getProfile(player)
+	return if profile then profile.Embers else 0
+end
+
+function PlayerStateService.getUpgradeLevel(player: Player, key: string): number
+	local profile = DataService.getProfile(player)
+	if not profile then
+		return 0
+	end
+	return (profile.Upgrades :: any)[key] or 0
+end
+
+function PlayerStateService.getEquippedTool(player: Player): number
+	local profile = DataService.getProfile(player)
+	return if profile then profile.EquippedTool else ContentConfig.StartingToolIndex
+end
+
+function PlayerStateService.getHighestTool(player: Player): number
+	local profile = DataService.getProfile(player)
+	return if profile then profile.HighestTool else ContentConfig.StartingToolIndex
+end
+
+function PlayerStateService.isZoneUnlocked(player: Player, zoneKey: string): boolean
+	local profile = DataService.getProfile(player)
+	if not profile then
+		return false
+	end
+	return profile.UnlockedZones[zoneKey] == true
+end
+
+function PlayerStateService.getDiscoveryCount(player: Player): number
+	local profile = DataService.getProfile(player)
+	return if profile then countDiscoveries(profile) else 0
+end
+
+-- === Mutations =============================================================
+-- Each one validates, clamps, marks the profile dirty, and queues replication.
+
+--[[
+	Adds (or removes, with a negative amount) Heat. Returns the new balance.
+	Heat is clamped into [0, MaxHeat]: a negative balance or a NaN would poison every
+	downstream cost check.
+]]
+function PlayerStateService.addHeat(player: Player, amount: number): number
+	local profile = DataService.getProfile(player)
+	if not profile then
+		return 0
+	end
+	if not Validate.isFiniteNumber(amount) then
+		warn(
+			string.format("[IceMelt] addHeat got a non-finite amount for %s; ignored", player.Name)
+		)
+		return profile.Heat
+	end
+
+	profile.Heat = Validate.clampFinite(profile.Heat + amount, 0, GameConfig.Limits.MaxHeat)
+
+	if amount > 0 then
+		profile.LifetimeHeat = Validate.clampFinite(profile.LifetimeHeat + amount, 0, math.huge - 1)
+		profile.RunHeat = Validate.clampFinite(profile.RunHeat + amount, 0, math.huge - 1)
+	end
+
+	DataService.markDirty(player)
+	PlayerStateService.queuePush(player)
+	return profile.Heat
+end
+
+function PlayerStateService.addEmbers(player: Player, amount: number): number
+	local profile = DataService.getProfile(player)
+	if not profile then
+		return 0
+	end
+	if not Validate.isFiniteNumber(amount) then
+		return profile.Embers
+	end
+
+	profile.Embers = Validate.clampFinite(profile.Embers + amount, 0, GameConfig.Limits.MaxEmbers)
+	DataService.markDirty(player)
+	PlayerStateService.queuePush(player)
+	return profile.Embers
 end
 
 --[[
-	The client says its controllers are running; the server answers with the first
-	snapshot. Idempotent and rate-limited, so replaying it costs nothing.
+	Sets an upgrade level. Rejects unknown keys and anything past the configured cap, so a
+	bug in a caller cannot write a level the balance curve never intended.
 ]]
+function PlayerStateService.setUpgradeLevel(player: Player, key: string, level: number): boolean
+	local profile = DataService.getProfile(player)
+	if not profile then
+		return false
+	end
+
+	local definition = BalanceConfig.Upgrades[key]
+	if not definition then
+		warn(string.format("[IceMelt] setUpgradeLevel got unknown upgrade %q", tostring(key)))
+		return false
+	end
+	if not Validate.isIntegerInRange(level, 0, definition.Cap) then
+		return false
+	end
+
+	(profile.Upgrades :: any)[key] = level
+	DataService.markDirty(player)
+	PlayerStateService.queuePush(player)
+	return true
+end
+
+--[[
+	Raises the highest unlocked tool. Never lowers it: a tool once bought stays bought.
+]]
+function PlayerStateService.setHighestTool(player: Player, index: number): boolean
+	local profile = DataService.getProfile(player)
+	if not profile then
+		return false
+	end
+	if not Validate.isIntegerInRange(index, 1, #ContentConfig.Tools) then
+		return false
+	end
+	if index <= profile.HighestTool then
+		return false
+	end
+
+	profile.HighestTool = index
+	DataService.markDirty(player)
+	PlayerStateService.queuePush(player)
+	return true
+end
+
+--[[
+	Equips a tool the player has actually unlocked. The unlock check lives here rather
+	than in the caller so every path is covered.
+]]
+function PlayerStateService.setEquippedTool(player: Player, index: number): boolean
+	local profile = DataService.getProfile(player)
+	if not profile then
+		return false
+	end
+	if not Validate.isIntegerInRange(index, 1, #ContentConfig.Tools) then
+		return false
+	end
+	if index > profile.HighestTool then
+		return false
+	end
+
+	profile.EquippedTool = index
+	DataService.markDirty(player)
+	PlayerStateService.queuePush(player)
+	return true
+end
+
+function PlayerStateService.unlockZone(player: Player, zoneKey: string): boolean
+	local profile = DataService.getProfile(player)
+	if not profile then
+		return false
+	end
+	if ContentConfig.Zones[zoneKey] == nil then
+		warn(string.format("[IceMelt] unlockZone got unknown zone %q", tostring(zoneKey)))
+		return false
+	end
+	if profile.UnlockedZones[zoneKey] then
+		return false
+	end
+
+	profile.UnlockedZones[zoneKey] = true
+	DataService.markDirty(player)
+	PlayerStateService.queuePush(player)
+	return true
+end
+
+--[[
+	Records a discovery. Returns true when it was the player's first of that kind, which
+	is what the reveal UI needs to know.
+]]
+function PlayerStateService.addDiscovery(player: Player, key: string): boolean
+	local profile = DataService.getProfile(player)
+	if not profile then
+		return false
+	end
+
+	local known = false
+	for _, discovery in ContentConfig.Discoveries do
+		if discovery.Key == key then
+			known = true
+			break
+		end
+	end
+	if not known then
+		warn(string.format("[IceMelt] addDiscovery got unknown discovery %q", tostring(key)))
+		return false
+	end
+
+	local previous = profile.Discoveries[key] or 0
+	profile.Discoveries[key] = previous + 1
+
+	DataService.markDirty(player)
+	PlayerStateService.queuePush(player)
+	return previous == 0
+end
+
+-- === Handshake =============================================================
+
 local function onClientReady(player: Player)
 	local bucket = readyBuckets[player]
 	if not bucket or not Validate.consumeToken(bucket, os.clock()) then
 		return
 	end
 
-	if not states[player] then
-		-- Joined and left within the handshake window.
-		return
-	end
-
 	readyPlayers[player] = true
-	PlayerStateService.push(player)
+
+	-- The client may finish starting before its profile has loaded. Say nothing now; the
+	-- DataService loaded signal pushes the first snapshot when it is genuinely ready.
+	if DataService.isLoaded(player) then
+		PlayerStateService.push(player)
+	end
+end
+
+local function onPlayerAdded(player: Player)
+	readyBuckets[player] = Validate.newTokenBucket(3, 0.5, os.clock())
+end
+
+local function onPlayerRemoving(player: Player)
+	readyPlayers[player] = nil
+	readyBuckets[player] = nil
+	pendingPush[player] = nil
 end
 
 function PlayerStateService.Init()
@@ -138,12 +354,33 @@ function PlayerStateService.Start()
 	Players.PlayerAdded:Connect(onPlayerAdded)
 	Players.PlayerRemoving:Connect(onPlayerRemoving)
 
-	-- Players can already be present when a Studio server starts.
 	for _, player in Players:GetPlayers() do
-		if not states[player] then
+		if not readyBuckets[player] then
 			onPlayerAdded(player)
 		end
 	end
+
+	-- Push the first snapshot as soon as the profile exists, for players whose handshake
+	-- landed before their load finished.
+	DataService.getLoadedSignal():Connect(function(player: Player)
+		if readyPlayers[player] then
+			PlayerStateService.push(player)
+		end
+	end)
+
+	-- Coalesced replication.
+	task.spawn(function()
+		while true do
+			task.wait(REPLICATION_INTERVAL)
+			for player in pendingPush do
+				if player.Parent then
+					PlayerStateService.push(player)
+				else
+					pendingPush[player] = nil
+				end
+			end
+		end
+	end)
 end
 
 return PlayerStateService
