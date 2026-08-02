@@ -48,8 +48,14 @@
 - `scripts/start-dev.ps1`
 - `selene.toml`
 - `src/client/Bootstrap.client.luau`
+- `src/client/Controllers/StateController.luau`
+- `src/client/Runtime/ControllerRuntime.luau`
+- `src/client/Runtime/RemoteAccess.luau`
 - `src/server/Bootstrap.server.luau`
+- `src/server/Runtime/RemoteRegistry.luau`
 - `src/server/Runtime/RuntimeContainers.luau`
+- `src/server/Runtime/ServiceRuntime.luau`
+- `src/server/Services/PlayerStateService.luau`
 - `src/server/World/WorldSkeleton.luau`
 - `src/shared/Config/BalanceConfig.luau`
 - `src/shared/Config/ContentConfig.luau`
@@ -59,7 +65,11 @@
 - `src/shared/Config/RemoteNames.luau`
 - `src/shared/Config/TagNames.luau`
 - `src/shared/Config/WorldConfig.luau`
+- `src/shared/Runtime/Lifecycle.luau`
 - `src/shared/Types.luau`
+- `src/shared/Util/ConfigAudit.luau`
+- `src/shared/Util/NumberFormatter.luau`
+- `src/shared/Util/Validate.luau`
 - `stylua.toml`
 
 ## Generated, not committed

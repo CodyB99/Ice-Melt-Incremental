@@ -5,7 +5,7 @@ Updated: 2026-08-02
 ## Phase checklist
 
 - [x] 00 — Repository, Rojo, Studio MCP, and DataModel setup
-- [ ] 01 — Shared types, configuration, remotes, and bootstrapping
+- [x] 01 — Shared types, configuration, remotes, and bootstrapping
 - [ ] 02 — Player data, session safety, and replicated state
 - [ ] 03 — Ice fields, server-authoritative melt loop, and pooling
 - [ ] 04 — Heat economy, upgrades, tool progression, and number formatting
@@ -74,6 +74,39 @@ Exact Output from the play test:
 
 The first line is an intended one-time warning, not an error.
 
+### Phase 01 evidence
+
+Run 2026-08-02. Play-mode Output, verbatim:
+
+```
+[IceMelt] WorldSkeleton: disabled foreign SpawnLocation at Workspace.SpawnLocation. The hub spawn is the only supported spawn point.
+[IceMelt] config warning: MonetizationConfig: 11 marketplace ID(s) are still 0 and stay disabled (expected until Phase 09)
+[Ice Melt Incremental] server ready | env=Development | store=IceMelt_PlayerData_DEV_v1 | zones=3 | remotes=14 | services=1 [PlayerStateService] | config=0E/1W
+[Ice Melt Incremental] client ready | env=Development | remotes=ok | controllers=1 [StateController]
+```
+
+| Phase | Command / test | Result |
+|---|---|---|
+| 01 | `stylua --check`, `selene`, `rojo build`, `luau-lsp analyze` | **Pass**, all exit 0. `luau-lsp` first found 4 type errors, all fixed |
+| 01 | Remote set matches the schema exactly | **Pass** — 14 created, 14 in schema, 0 unexpected, 0 non-RemoteEvent |
+| 01 | Rogue objects planted in the Remotes folder | **Pass** — a backdoor RemoteEvent and a RemoteFunction named `PlayerState` were both destroyed on rebuild; folder returned to 14 and `PlayerState` is a RemoteEvent |
+| 01 | No generic client→server command channel | **Pass** — 0 remotes match command/dispatch heuristics; `ConfigAudit` also fails the build if one is added |
+| 01 | Client cannot reach an unregistered remote | **Pass** — `fire("AdminCommand")` and `connect("SecretBackdoor")` both rejected |
+| 01 | Remote direction enforced both sides | **Pass** — client firing a ServerToClient remote, client listening on a ClientToServer remote, server firing an inbound remote, and server listening on an outbound remote are all rejected |
+| 01 | Handshake end to end | **Pass** — `ClientReady` answered with a snapshot containing exactly the 8 `ReplicatedPlayerState` keys. `ReceiptHistory`, `LifetimeHeat`, and `RunHeat` all absent |
+| 01 | Deterministic start order | **Pass** — priority order honoured (`Early` before `Late` regardless of registration order); logged once per side |
+| 01 | Init-must-not-yield assertion | **Pass** — a service yielding in `Init` was detected and reported |
+| 01 | Duplicate service name assertion | **Pass** — rejected |
+| 01 | Missing dependency assertion | **Pass** — `expect()` on an unregistered name rejected |
+| 01 | `ConfigAudit` over live config | **Pass** — 0 errors, 1 warning (11 marketplace IDs still 0, expected until Phase 09) |
+| 01 | `NumberFormatter` | **Pass** — `1,234,567`, `1.23K`, `45.6M`, `999`, `3.5%`, `1h 1m`; NaN renders `--` rather than leaking `nan` |
+| 01 | `Validate` rejects hostile payloads | **Pass** — NaN, infinity, fractional levels, oversize arrays, and sparse tables all rejected |
+
+Bug found and fixed during this phase: the handshake was a single fire-and-forget
+`ClientReady`. Because it is an event, firing it before the server connected its listener
+would drop it silently and leave the client with no state forever. It now retries a bounded
+4 times at 0.75s and warns if it gives up; the server's rate limit was widened to match.
+
 ## Acceptance criteria — Phase 00
 
 | Criterion | Status |
@@ -102,9 +135,22 @@ The first line is an intended one-time warning, not an error.
 - Placeholder world only. The default Baseplate is still present under the Backyard slab;
   Phase 05 replaces the placeholder ground with real zone art.
 
+## Acceptance criteria — Phase 01
+
+| Criterion | Status |
+|---|---|
+| All Luau files strict and typecheck as far as tooling permits | **Met** — `--!strict` throughout, `luau-lsp analyze` exit 0 |
+| Server creates only expected remotes | **Met** — verified by count, name, and class, including a rogue-object rebuild test |
+| Client cannot invoke unregistered generic command remotes | **Met** — no such remote exists, `RemoteAccess` rejects unknown names, and `ConfigAudit` blocks one being added |
+| Start order logged once in development, no untimed race waits | **Met** — one line per side; every `WaitForChild` has a timeout; `Init` yielding is detected rather than tolerated |
+| Build/play test has no red errors | **Met** |
+
 ## Next action
 
-Run Phase 01 — shared types, configuration, remotes, service/controller lifecycle.
+Run Phase 02 — persistence and player state.
 
-Phase 01 must preserve: the `EnvironmentConfig` production guard, the server-created
-runtime containers, and the single development-only startup line per bootstrap.
+Phase 02 must preserve: the `EnvironmentConfig` production guard, server-created runtime
+containers, the closed remote schema, and one development-only startup line per bootstrap.
+`PlayerStateService` currently serves in-memory defaults; Phase 02 replaces those with
+profiles loaded through `DataService` while keeping the module's public shape
+(`getState` returning a copy, and clients never receiving a profile).

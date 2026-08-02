@@ -1,19 +1,139 @@
 --!strict
 
-return table.freeze({
-	Upgrades = table.freeze({
-		Power = table.freeze({ BaseCost = 15, Growth = 1.32, Cap = 100 }),
-		Radius = table.freeze({ BaseCost = 60, Growth = 1.55, Cap = 45 }),
-		Value = table.freeze({ BaseCost = 25, Growth = 1.38, Cap = 100 }),
-		Speed = table.freeze({ BaseCost = 100, Growth = 1.70, Cap = 20 }),
-		Crit = table.freeze({ BaseCost = 250, Growth = 1.65, Cap = 44 }),
-		Luck = table.freeze({ BaseCost = 500, Growth = 1.75, Cap = 40 }),
-		Auto = table.freeze({ BaseCost = 2500, Growth = 1.80, Cap = 20 }),
+--[[
+	Balance baseline from docs/03_ECONOMY_AND_BALANCE.md.
+
+	Cost of the next level:   floor(BaseCost * Growth ^ currentLevel)
+	Stat from levels:
+	    Scaling = "Multiplier" -> BaseEffect * (PerLevel ^ level)
+	    Scaling = "Additive"   -> BaseEffect + (PerLevel * level)
+
+	Documented order of operations for melt damage, so later phases cannot drift:
+	    damage = PowerStat * ToolPower
+	    heat   = CellHeat * ValueStat * ZoneHeat * CritMultiplier (if critical)
+	Radius and luck are resolved the same way and clamped by Limits before use.
+
+	Crit caps at 44 levels: 3% + 44 * 0.5% = 25%, matching the 25% ceiling in docs/03.
+]]
+
+local Types = require(script.Parent.Parent.Types)
+
+type UpgradeDefinition = Types.UpgradeDefinition
+
+local UPGRADES: { [string]: UpgradeDefinition } = table.freeze({
+	Power = table.freeze({
+		Key = "Power" :: Types.UpgradeKey,
+		DisplayName = "Melt Power",
+		BaseCost = 15,
+		Growth = 1.32,
+		Cap = 100,
+		BaseEffect = 10,
+		PerLevel = 1.16,
+		Scaling = "Multiplier" :: Types.UpgradeScaling,
 	}),
+	Radius = table.freeze({
+		Key = "Radius" :: Types.UpgradeKey,
+		DisplayName = "Melt Radius",
+		BaseCost = 60,
+		Growth = 1.55,
+		Cap = 45,
+		BaseEffect = 4.5,
+		PerLevel = 0.45,
+		Scaling = "Additive" :: Types.UpgradeScaling,
+	}),
+	Value = table.freeze({
+		Key = "Value" :: Types.UpgradeKey,
+		DisplayName = "Heat Value",
+		BaseCost = 25,
+		Growth = 1.38,
+		Cap = 100,
+		BaseEffect = 1,
+		PerLevel = 1.12,
+		Scaling = "Multiplier" :: Types.UpgradeScaling,
+	}),
+	Speed = table.freeze({
+		Key = "Speed" :: Types.UpgradeKey,
+		DisplayName = "Walk Speed",
+		BaseCost = 100,
+		Growth = 1.7,
+		Cap = 20,
+		BaseEffect = 16,
+		PerLevel = 0.75,
+		Scaling = "Additive" :: Types.UpgradeScaling,
+	}),
+	Crit = table.freeze({
+		Key = "Crit" :: Types.UpgradeKey,
+		DisplayName = "Critical Melt",
+		BaseCost = 250,
+		Growth = 1.65,
+		Cap = 44,
+		BaseEffect = 0.03,
+		PerLevel = 0.005,
+		Scaling = "Additive" :: Types.UpgradeScaling,
+	}),
+	Luck = table.freeze({
+		Key = "Luck" :: Types.UpgradeKey,
+		DisplayName = "Discovery Luck",
+		BaseCost = 500,
+		Growth = 1.75,
+		Cap = 40,
+		BaseEffect = 1,
+		PerLevel = 1.08,
+		Scaling = "Multiplier" :: Types.UpgradeScaling,
+	}),
+	Auto = table.freeze({
+		Key = "Auto" :: Types.UpgradeKey,
+		DisplayName = "Auto-Melt",
+		BaseCost = 2500,
+		Growth = 1.8,
+		Cap = 20,
+		BaseEffect = 0,
+		PerLevel = 0.1,
+		Scaling = "Additive" :: Types.UpgradeScaling,
+	}),
+})
+
+return table.freeze({
+	Upgrades = UPGRADES,
+
+	-- Build order for UI and for deterministic iteration. Never iterate the map directly
+	-- where order matters; pairs() order is not stable.
+	UpgradeOrder = table.freeze({ "Power", "Radius", "Value", "Speed", "Crit", "Luck", "Auto" }),
+
+	Melt = table.freeze({
+		CriticalMultiplier = 3,
+		-- Hard ceilings applied after every multiplier, so no combination of upgrades,
+		-- passes, and boosts can produce an absurd single reward.
+		MaxRadiusStuds = 40,
+		MaxHeatPerPulse = 1e12,
+	}),
+
 	Thaw = table.freeze({
 		BaseRequirement = 1_000_000,
 		EmberExponent = 0.55,
 		EmberMultiplier = 0.15,
 		EmberMultiplierExponent = 0.65,
+	}),
+
+	Discovery = table.freeze({
+		-- Baseline weights from docs/04. Adjusted by zone luck, then normalised.
+		RarityWeights = table.freeze({
+			Common = 55,
+			Uncommon = 25,
+			Rare = 12,
+			Epic = 5.5,
+			Legendary = 2,
+			Secret = 0.5,
+		}),
+		RarityOrder = table.freeze({
+			"Common",
+			"Uncommon",
+			"Rare",
+			"Epic",
+			"Legendary",
+			"Secret",
+		}),
+		-- Luck scales the rare end only; it must never be able to drive Common to zero.
+		MinCommonWeight = 1,
 	}),
 })

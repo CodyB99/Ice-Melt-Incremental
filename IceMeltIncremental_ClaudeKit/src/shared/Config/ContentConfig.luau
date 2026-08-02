@@ -1,82 +1,176 @@
 --!strict
 
+--[[
+	Content catalogue from docs/04_CONTENT_CATALOG.md: 8 tools, 3 zones, 20 discoveries,
+	3 chain-reaction objects.
+
+	docs/04 lists the discoveries per zone and a global rarity distribution but does not
+	map one to the other. The per-discovery Rarity values below are a first pass chosen so
+	each zone spans several tiers and the rarest tiers sit in the later zones. Tune from
+	live data; nothing in code depends on a specific assignment.
+]]
+
+local Types = require(script.Parent.Parent.Types)
+
+type ToolDefinition = Types.ToolDefinition
+type ZoneDefinition = Types.ZoneDefinition
+type DiscoveryDefinition = Types.DiscoveryDefinition
+type ChainDefinition = Types.ChainDefinition
+
+local TOOLS: { ToolDefinition } = table.freeze({
+	table.freeze({ Key = "Match", DisplayName = "Match", Cost = 0, Power = 1.0, Radius = 0 }),
+	table.freeze({
+		Key = "Candle",
+		DisplayName = "Candle",
+		Cost = 350,
+		Power = 1.35,
+		Radius = 0.25,
+	}),
+	table.freeze({ Key = "Torch", DisplayName = "Torch", Cost = 2500, Power = 1.85, Radius = 0.5 }),
+	table.freeze({
+		Key = "Blowtorch",
+		DisplayName = "Blowtorch",
+		Cost = 18000,
+		Power = 2.6,
+		Radius = 0.75,
+	}),
+	table.freeze({
+		Key = "Flamethrower",
+		DisplayName = "Flamethrower",
+		Cost = 125000,
+		Power = 3.8,
+		Radius = 1.25,
+	}),
+	table.freeze({
+		Key = "HeatCannon",
+		DisplayName = "Heat Cannon",
+		Cost = 900000,
+		Power = 5.8,
+		Radius = 1.75,
+	}),
+	table.freeze({
+		Key = "LavaCore",
+		DisplayName = "Lava Core",
+		Cost = 8000000,
+		Power = 9.0,
+		Radius = 2.5,
+	}),
+	table.freeze({
+		Key = "MiniSun",
+		DisplayName = "Mini Sun",
+		Cost = 85000000,
+		Power = 15.0,
+		Radius = 4.0,
+	}),
+})
+
+local ZONES: { [string]: ZoneDefinition } = table.freeze({
+	Backyard = table.freeze({
+		DisplayName = "Frozen Backyard",
+		Cost = 0,
+		Durability = 10,
+		Heat = 1,
+		RespawnSeconds = 5,
+		Luck = 1.0,
+	}),
+	Cavern = table.freeze({
+		DisplayName = "Ice Cavern",
+		Cost = 25000,
+		Durability = 250,
+		Heat = 30,
+		RespawnSeconds = 7,
+		Luck = 1.5,
+	}),
+	City = table.freeze({
+		DisplayName = "Frozen City",
+		Cost = 5000000,
+		Durability = 12000,
+		Heat = 1800,
+		RespawnSeconds = 9,
+		Luck = 2.25,
+	}),
+})
+
+--[[
+	Constructor rather than table literals: Zone and Rarity are string-literal unions, and
+	a bare literal in a table widens to `string` and loses the check. Going through typed
+	parameters means a typo like "Backyrd" or "Mythic" fails to typecheck at the call site.
+]]
+local function discovery(
+	key: string,
+	displayName: string,
+	zone: Types.ZoneKey,
+	rarity: Types.Rarity
+): DiscoveryDefinition
+	return table.freeze({ Key = key, DisplayName = displayName, Zone = zone, Rarity = rarity })
+end
+
+local DISCOVERIES: { DiscoveryDefinition } = table.freeze({
+	-- Frozen Backyard
+	discovery("FrozenCoin", "Frozen Coin", "Backyard", "Common"),
+	discovery("ToyCar", "Toy Car", "Backyard", "Common"),
+	discovery("LostMitten", "Lost Mitten", "Backyard", "Uncommon"),
+	discovery("SnowGlobe", "Snow Globe", "Backyard", "Rare"),
+	discovery("GoldenKey", "Golden Key", "Backyard", "Epic"),
+	discovery("TinyMammoth", "Tiny Mammoth", "Backyard", "Legendary"),
+
+	-- Ice Cavern
+	discovery("TrilobiteFossil", "Trilobite Fossil", "Cavern", "Common"),
+	discovery("CrystalSkull", "Crystal Skull", "Cavern", "Uncommon"),
+	discovery("AncientSword", "Ancient Sword", "Cavern", "Rare"),
+	discovery("FrozenExplorer", "Frozen Explorer", "Cavern", "Rare"),
+	discovery("DragonEgg", "Dragon Egg", "Cavern", "Epic"),
+	discovery("RoyalChest", "Royal Chest", "Cavern", "Legendary"),
+	discovery("GlowingCore", "Glowing Core", "Cavern", "Secret"),
+
+	-- Frozen City
+	discovery("DiamondWatch", "Diamond Watch", "City", "Common"),
+	discovery("FrozenRobot", "Frozen Robot", "City", "Uncommon"),
+	discovery("SportsCarKey", "Sports Car Key", "City", "Uncommon"),
+	discovery("MeteorFragment", "Meteor Fragment", "City", "Rare"),
+	discovery("AlienBeacon", "Alien Beacon", "City", "Epic"),
+	discovery("GoldenStatue", "Golden Statue", "City", "Legendary"),
+	discovery("SecretPrototype", "Secret Prototype", "City", "Secret"),
+})
+
+--[[
+	Chain reactions award normal validated rewards with a hard server cap per event, so
+	MaxCells is a security limit rather than a tuning knob. See docs/04.
+]]
+local CHAINS: { ChainDefinition } = table.freeze({
+	table.freeze({
+		Key = "HeatPocket",
+		DisplayName = "Heat Pocket",
+		Radius = 12,
+		MaxCells = 12,
+		Announce = false,
+	}),
+	table.freeze({
+		Key = "LavaCapsule",
+		DisplayName = "Lava Capsule",
+		Radius = 26,
+		MaxCells = 40,
+		Announce = false,
+	}),
+	table.freeze({
+		Key = "UnstableReactor",
+		DisplayName = "Unstable Reactor",
+		Radius = 48,
+		MaxCells = 120,
+		Announce = true,
+	}),
+})
+
 return table.freeze({
-	Tools = table.freeze({
-		table.freeze({ Key = "Match", DisplayName = "Match", Cost = 0, Power = 1.0, Radius = 0 }),
-		table.freeze({
-			Key = "Candle",
-			DisplayName = "Candle",
-			Cost = 350,
-			Power = 1.35,
-			Radius = 0.25,
-		}),
-		table.freeze({
-			Key = "Torch",
-			DisplayName = "Torch",
-			Cost = 2500,
-			Power = 1.85,
-			Radius = 0.50,
-		}),
-		table.freeze({
-			Key = "Blowtorch",
-			DisplayName = "Blowtorch",
-			Cost = 18000,
-			Power = 2.60,
-			Radius = 0.75,
-		}),
-		table.freeze({
-			Key = "Flamethrower",
-			DisplayName = "Flamethrower",
-			Cost = 125000,
-			Power = 3.80,
-			Radius = 1.25,
-		}),
-		table.freeze({
-			Key = "HeatCannon",
-			DisplayName = "Heat Cannon",
-			Cost = 900000,
-			Power = 5.80,
-			Radius = 1.75,
-		}),
-		table.freeze({
-			Key = "LavaCore",
-			DisplayName = "Lava Core",
-			Cost = 8000000,
-			Power = 9.00,
-			Radius = 2.50,
-		}),
-		table.freeze({
-			Key = "MiniSun",
-			DisplayName = "Mini Sun",
-			Cost = 85000000,
-			Power = 15.00,
-			Radius = 4.00,
-		}),
-	}),
-	Zones = table.freeze({
-		Backyard = table.freeze({
-			DisplayName = "Frozen Backyard",
-			Cost = 0,
-			Durability = 10,
-			Heat = 1,
-			RespawnSeconds = 5,
-			Luck = 1.0,
-		}),
-		Cavern = table.freeze({
-			DisplayName = "Ice Cavern",
-			Cost = 25000,
-			Durability = 250,
-			Heat = 30,
-			RespawnSeconds = 7,
-			Luck = 1.5,
-		}),
-		City = table.freeze({
-			DisplayName = "Frozen City",
-			Cost = 5000000,
-			Durability = 12000,
-			Heat = 1800,
-			RespawnSeconds = 9,
-			Luck = 2.25,
-		}),
-	}),
+	Tools = TOOLS,
+	Zones = ZONES,
+	Discoveries = DISCOVERIES,
+	Chains = CHAINS,
+
+	-- Deterministic iteration order. pairs() order is not stable, so anything
+	-- order-sensitive (UI lists, progression gates, audits) must use this.
+	ZoneOrder = table.freeze({ "Backyard", "Cavern", "City" }),
+
+	StartingZone = "Backyard",
+	StartingToolIndex = 1,
 })
