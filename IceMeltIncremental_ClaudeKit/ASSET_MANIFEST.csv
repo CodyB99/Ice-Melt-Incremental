@@ -1,0 +1,11 @@
+asset_key,asset_type,source,asset_id_or_path,license_or_owner,contains_scripts,inspection_status,replacement_priority,notes
+GameIcon,Image,Custom,,Owner,No,Missing,High,
+Thumbnail01,Image,Custom,,Owner,No,Missing,High,
+MatchModel,Model,StudioProcedural,,,No,Planned,Medium,
+CandleModel,Model,StudioProcedural,,,No,Planned,Medium,
+TorchModel,Model,StudioProcedural,,,No,Planned,Medium,
+BlowtorchModel,Model,StudioProcedural,,,No,Planned,Medium,
+FlamethrowerModel,Model,StudioProcedural,,,No,Planned,High,
+HeatCannonModel,Model,StudioProcedural,,,No,Planned,High,
+LavaCoreModel,Model,CustomOrProcedural,,,No,Planned,High,
+MiniSunModel,Model,CustomOrProcedural,,,No,Planned,High,

@@ -1,0 +1,69 @@
+# Included Files
+
+- `.claude/skills/build-next-phase/SKILL.md`
+- `.claude/skills/review-current-phase/SKILL.md`
+- `.claude/skills/studio-mcp-test/SKILL.md`
+- `.gitattributes`
+- `.gitignore`
+- `.luau-analyze.json`
+- `ASSET_MANIFEST.csv`
+- `CLAUDE.md`
+- `DECISIONS.md`
+- `FILE_INDEX.md`
+- `PROJECT_STATUS.md`
+- `README_FIRST.md`
+- `default.project.json`
+- `docs/01_GAME_DESIGN.md`
+- `docs/02_TECHNICAL_ARCHITECTURE.md`
+- `docs/03_ECONOMY_AND_BALANCE.md`
+- `docs/04_CONTENT_CATALOG.md`
+- `docs/05_MONETIZATION.md`
+- `docs/06_UI_UX.md`
+- `docs/07_ART_AUDIO_ASSETS.md`
+- `docs/08_ANALYTICS.md`
+- `docs/09_QA_RELEASE.md`
+- `docs/10_POST_LAUNCH_BACKLOG.md`
+- `docs/11_ROBLOX_DASHBOARD_SETUP.md`
+- `docs/12_LOCAL_ENVIRONMENT.md`
+- `prompts/MASTER_PROJECT_PROMPT.md`
+- `prompts/PHASE_00.md`
+- `prompts/PHASE_01.md`
+- `prompts/PHASE_02.md`
+- `prompts/PHASE_03.md`
+- `prompts/PHASE_04.md`
+- `prompts/PHASE_05.md`
+- `prompts/PHASE_06.md`
+- `prompts/PHASE_07.md`
+- `prompts/PHASE_08.md`
+- `prompts/PHASE_09.md`
+- `prompts/PHASE_10.md`
+- `prompts/PHASE_11.md`
+- `roblox.yml` — selene Roblox standard library, generated once and committed so lint runs offline
+- `rokit.toml`
+- `scripts/analyze.ps1`
+- `scripts/build.ps1`
+- `scripts/fetch-types.ps1`
+- `scripts/format.ps1`
+- `scripts/lint.ps1`
+- `scripts/start-dev.ps1`
+- `selene.toml`
+- `src/client/Bootstrap.client.luau`
+- `src/server/Bootstrap.server.luau`
+- `src/server/Runtime/RuntimeContainers.luau`
+- `src/server/World/WorldSkeleton.luau`
+- `src/shared/Config/BalanceConfig.luau`
+- `src/shared/Config/ContentConfig.luau`
+- `src/shared/Config/EnvironmentConfig.luau`
+- `src/shared/Config/GameConfig.luau`
+- `src/shared/Config/MonetizationConfig.luau`
+- `src/shared/Config/RemoteNames.luau`
+- `src/shared/Config/TagNames.luau`
+- `src/shared/Config/WorldConfig.luau`
+- `src/shared/Types.luau`
+- `stylua.toml`
+
+## Generated, not committed
+
+- `IceMeltIncremental.rbxlx` — `rojo build` output
+- `sourcemap.json` — `rojo sourcemap` output, consumed by `scripts/analyze.ps1`
+- `tools/globalTypes.d.luau` — downloaded by `scripts/fetch-types.ps1`

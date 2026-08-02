@@ -1,0 +1,32 @@
+{
+  "name": "IceMeltIncremental",
+  "servePort": 34873,
+  "globIgnorePaths": ["**/.*"],
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "$className": "ReplicatedStorage",
+      "IceMelt": {
+        "$className": "Folder",
+        "Shared": {
+          "$path": "src/shared"
+        }
+      }
+    },
+    "ServerScriptService": {
+      "$className": "ServerScriptService",
+      "IceMeltServer": {
+        "$path": "src/server"
+      }
+    },
+    "StarterPlayer": {
+      "$className": "StarterPlayer",
+      "StarterPlayerScripts": {
+        "$className": "StarterPlayerScripts",
+        "IceMeltClient": {
+          "$path": "src/client"
+        }
+      }
+    }
+  }
+}

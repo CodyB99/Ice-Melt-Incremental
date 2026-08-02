@@ -1,0 +1,5 @@
+{
+  "luau-lsp.require.mode": "relativeToFile",
+  "luau-lsp.types.roblox": true,
+  "luau-lsp.diagnostics.strictDatamodelTypes": false
+}
