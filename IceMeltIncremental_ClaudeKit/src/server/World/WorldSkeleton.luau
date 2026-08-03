@@ -29,6 +29,7 @@ local ContentConfig = require(ConfigFolder:WaitForChild("ContentConfig"))
 local GameConfig = require(ConfigFolder:WaitForChild("GameConfig"))
 local TagNames = require(ConfigFolder:WaitForChild("TagNames"))
 local WorldConfig = require(ConfigFolder:WaitForChild("WorldConfig"))
+local ZoneStyleConfig = require(ConfigFolder:WaitForChild("ZoneStyleConfig"))
 
 export type BuildResult = {
 	ZonesBuilt: number,
@@ -186,6 +187,79 @@ local function buildBoundaries(
 	end
 end
 
+--[[
+	Decorative props around a zone's perimeter, from ZoneStyleConfig.
+
+	Placement uses a seeded generator so every server and every rebuild produces the same
+	world. An unseeded math.random would make two servers visually different, and would make
+	a bug report impossible to reproduce.
+
+	Props are pushed to a ring outside the ice field so the playable middle stays clear, and
+	carry no collision or queries: they exist to make the zones distinguishable, not to be
+	something the melt loop has to reason about.
+]]
+local function buildZoneProps(zoneFolder: Instance, zoneKey: string, layout: any)
+	local style = ZoneStyleConfig.Styles[zoneKey] or ZoneStyleConfig.Fallback
+	local propsFolder = ensureFolder(zoneFolder, WorldConfig.ZoneFolders.Props)
+
+	for _, child in propsFolder:GetChildren() do
+		child:Destroy()
+	end
+
+	-- Seeded per zone so zones do not share a layout.
+	local rng = Random.new(ZoneStyleConfig.PlacementSeed + #zoneKey * 7919)
+	local halfExtent = layout.GroundSize.X / 2
+	local groundTop = layout.Center.Y + layout.GroundSize.Y / 2
+
+	for _, spec in style.Props do
+		for index = 1, spec.Count do
+			local angle = rng:NextNumber(0, math.pi * 2)
+			local distance = halfExtent * rng:NextNumber(spec.MinRadius, spec.MaxRadius)
+			local jitter = if spec.HeightJitter > 0 then rng:NextNumber(0, spec.HeightJitter) else 0
+			local height = spec.Size.Y + jitter
+
+			local part = Instance.new("Part")
+			part.Name = string.format("%s_%d", spec.Kind, index)
+			part.Size = Vector3.new(spec.Size.X, height, spec.Size.Z)
+			part.CFrame = CFrame.new(
+				layout.Center.X + math.cos(angle) * distance,
+				groundTop + height / 2,
+				layout.Center.Z + math.sin(angle) * distance
+			) * CFrame.Angles(0, rng:NextNumber(0, math.pi * 2), 0)
+			part.Anchored = true
+			part.CanCollide = false
+			part.CanQuery = false
+			part.CanTouch = false
+			part.CastShadow = false
+			part.Color = spec.Color
+			part.Material = spec.Material
+			part.Parent = propsFolder
+		end
+	end
+end
+
+--[[
+	The pad a player lands on when travelling here. Tagged so ZoneService and later phases
+	can find it without a hard-coded path.
+]]
+local function buildTravelPad(zoneFolder: Instance, zoneKey: string, layout: any)
+	local markers = ensureFolder(zoneFolder, WorldConfig.ZoneFolders.Markers)
+
+	local pad = ensureChild(markers, "TravelPad", "Part") :: Part
+	pad.Size = Vector3.new(14, 0.6, 14)
+	pad.CFrame = CFrame.new(layout.ArrivalPosition - Vector3.new(0, 2.2, 0))
+	pad.Anchored = true
+	pad.CanCollide = false
+	pad.CanQuery = false
+	pad.CanTouch = false
+	pad.CastShadow = false
+	pad.Material = Enum.Material.Neon
+	pad.Color = Color3.fromRGB(255, 176, 92)
+	pad.Transparency = 0.35
+	pad:SetAttribute("ZoneKey", zoneKey)
+	ensureTag(pad, TagNames.TravelPad)
+end
+
 local function buildZone(zonesFolder: Instance, zoneKey: string, zoneIndex: number): boolean
 	local layout = WorldConfig.Zones[zoneKey]
 	local content = ContentConfig.Zones[zoneKey]
@@ -241,7 +315,9 @@ local function buildZone(zonesFolder: Instance, zoneKey: string, zoneIndex: numb
 	ensureTag(iceField, TagNames.IceField)
 	iceField:SetAttribute("ZoneKey", zoneKey)
 
-	ensureFolder(zoneFolder, WorldConfig.ZoneFolders.Props)
+	buildZoneProps(zoneFolder, zoneKey, layout)
+	buildTravelPad(zoneFolder, zoneKey, layout)
+
 	local markers = ensureFolder(zoneFolder, WorldConfig.ZoneFolders.Markers)
 
 	local subtitle = if content.Cost > 0

@@ -19,6 +19,12 @@ export type ZoneLayout = {
 	GroundMaterial: Enum.Material,
 	BoundaryHeight: number,
 	SignPosition: Vector3,
+	--[[
+		Where a player lands when they travel here. Deliberately at the zone's near edge
+		rather than the centre, so arriving mirrors walking in: the ice is ahead of you, not
+		already underfoot.
+	]]
+	ArrivalPosition: Vector3,
 }
 
 local ZONE_LAYOUTS: { [string]: ZoneLayout } = table.freeze({
@@ -30,6 +36,7 @@ local ZONE_LAYOUTS: { [string]: ZoneLayout } = table.freeze({
 		BoundaryHeight = 40,
 		-- Offset to the left of the walking line so it never blocks the route to the ice.
 		SignPosition = Vector3.new(-32, 9, -60),
+		ArrivalPosition = Vector3.new(0, 5, -72),
 	}),
 	Cavern = table.freeze({
 		Center = Vector3.new(0, 0, 400),
@@ -38,6 +45,7 @@ local ZONE_LAYOUTS: { [string]: ZoneLayout } = table.freeze({
 		GroundMaterial = Enum.Material.Ice,
 		BoundaryHeight = 40,
 		SignPosition = Vector3.new(0, 9, 296),
+		ArrivalPosition = Vector3.new(0, 5, 328),
 	}),
 	City = table.freeze({
 		Center = Vector3.new(0, 0, 800),
@@ -46,12 +54,13 @@ local ZONE_LAYOUTS: { [string]: ZoneLayout } = table.freeze({
 		GroundMaterial = Enum.Material.Concrete,
 		BoundaryHeight = 40,
 		SignPosition = Vector3.new(0, 9, 696),
+		ArrivalPosition = Vector3.new(0, 5, 728),
 	}),
 })
 
 return table.freeze({
 	-- Bump when the skeleton shape changes so stale geometry is rebuilt, not patched.
-	SkeletonVersion = 3,
+	SkeletonVersion = 5,
 
 	RootName = "IceMelt",
 
@@ -90,10 +99,14 @@ return table.freeze({
 		-- already facing the ice.
 		SpawnPosition = Vector3.new(0, 2.5, -72),
 		SpawnLookAt = Vector3.new(0, 2.5, 0),
-		-- Raised so the player walks under it rather than into it on the way to the ice.
-		TitleSignPosition = Vector3.new(0, 12, -60),
-		SignSize = Vector3.new(28, 10, 1),
-		TitleSignSize = Vector3.new(36, 12, 1),
+		--[[
+			Set back from the spawn and raised overhead. At 12 studs away and 36 wide it
+			filled the entire view on arrival; at 22 studs and 26 wide it reads as a gateway
+			banner over the route to the ice instead of a wall in front of it.
+		]]
+		TitleSignPosition = Vector3.new(0, 15, -50),
+		SignSize = Vector3.new(24, 9, 1),
+		TitleSignSize = Vector3.new(26, 9, 1),
 	}),
 
 	BoundaryThickness = 2,

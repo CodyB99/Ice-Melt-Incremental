@@ -53,6 +53,7 @@
 - `src/client/Controllers/MeltEffectsController.luau`
 - `src/client/Controllers/MeltInputController.luau`
 - `src/client/Controllers/StateController.luau`
+- `src/client/Controllers/ZoneController.luau`
 - `src/client/Runtime/ControllerRuntime.luau`
 - `src/client/Runtime/RemoteAccess.luau`
 - `src/server/Bootstrap.server.luau`
@@ -69,6 +70,7 @@
 - `src/server/Services/StatsService.luau`
 - `src/server/Services/ToolService.luau`
 - `src/server/Services/UpgradeService.luau`
+- `src/server/Services/ZoneService.luau`
 - `src/server/Services/PlayerStateService.luau`
 - `src/server/World/WorldSkeleton.luau`
 - `src/shared/Config/BalanceConfig.luau`
@@ -82,6 +84,7 @@
 - `src/shared/Config/ToolVisualConfig.luau`
 - `src/shared/Config/TagNames.luau`
 - `src/shared/Config/WorldConfig.luau`
+- `src/shared/Config/ZoneStyleConfig.luau`
 - `src/shared/Runtime/Lifecycle.luau`
 - `src/shared/Types.luau`
 - `src/shared/Util/ConfigAudit.luau`

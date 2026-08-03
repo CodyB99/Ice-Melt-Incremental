@@ -81,10 +81,16 @@ function DebugOverlayController.Start()
 	screenGui.Parent = playerGui
 
 	local label = Instance.new("TextLabel")
-	-- Below the HUD's Heat panel, which occupies the top-left corner. Overlapping it made
-	-- both unreadable.
-	label.AnchorPoint = Vector2.new(0, 0)
-	label.Position = UDim2.new(0, 12, 0, 76)
+	--[[
+		Bottom-left, which is the one corner the HUD does not use: the Heat panel is
+		top-left and the controls are bottom-right.
+
+		Positioning it near the HUD does not work reliably. This overlay sets
+		IgnoreGuiInset while the HUD does not, so the two use different coordinate origins
+		and an offset that looks clear in one is overlapping in the other.
+	]]
+	label.AnchorPoint = Vector2.new(0, 1)
+	label.Position = UDim2.new(0, 12, 1, -12)
 	label.Size = UDim2.new(0, 300, 0, 96)
 	label.BackgroundColor3 = Color3.fromRGB(12, 16, 24)
 	label.BackgroundTransparency = 0.35

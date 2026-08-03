@@ -55,6 +55,21 @@ local readyPlayers: { [Player]: boolean } = {}
 local readyBuckets: { [Player]: Validate.TokenBucket } = {}
 local pendingPush: { [Player]: boolean } = {}
 
+--[[
+	Which zone the server believes each player is in. Lives here rather than in ZoneService
+	because the snapshot needs it and ZoneService already depends on this module; putting it
+	the other way round would be a circular require. ZoneService remains the only writer.
+]]
+local currentZone: { [Player]: string } = {}
+
+function PlayerStateService.setCurrentZone(player: Player, zoneKey: string)
+	currentZone[player] = zoneKey
+end
+
+function PlayerStateService.getCurrentZone(player: Player): string
+	return currentZone[player] or ContentConfig.StartingZone
+end
+
 -- === Snapshot ==============================================================
 
 local function countDiscoveries(profile: PlayerProfile): number
@@ -80,8 +95,10 @@ local function buildSnapshot(player: Player, profile: PlayerProfile): Replicated
 		UnlockedZones = table.clone(profile.UnlockedZones),
 		DiscoveryCount = countDiscoveries(profile),
 		-- Finished numbers, not inputs. The client shows what the server decided rather
-		-- than recomputing the balance curves itself.
-		Stats = StatsService.getForDisplay(player, ContentConfig.StartingZone),
+		-- than recomputing the balance curves itself. Stats are zone-dependent, so they are
+		-- resolved for the zone the player is actually standing in.
+		Stats = StatsService.getForDisplay(player, PlayerStateService.getCurrentZone(player)),
+		CurrentZone = PlayerStateService.getCurrentZone(player),
 	}
 end
 
@@ -348,6 +365,7 @@ local function onPlayerRemoving(player: Player)
 	readyPlayers[player] = nil
 	readyBuckets[player] = nil
 	pendingPush[player] = nil
+	currentZone[player] = nil
 end
 
 function PlayerStateService.Init()

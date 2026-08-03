@@ -129,6 +129,8 @@ export type ReplicatedPlayerState = {
 	UnlockedZones: { [string]: boolean },
 	DiscoveryCount: number,
 	Stats: DerivedStats,
+	-- Where the server believes the player is. Derived from position, never from a claim.
+	CurrentZone: string,
 }
 
 export type ReceiptRecord = {

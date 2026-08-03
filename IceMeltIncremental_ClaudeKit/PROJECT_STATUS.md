@@ -8,8 +8,8 @@ Updated: 2026-08-02
 - [x] 01 — Shared types, configuration, remotes, and bootstrapping
 - [x] 02 — Player data, session safety, and replicated state
 - [x] 03 — Ice fields, server-authoritative melt loop, and pooling
-- [ ] 04 — Heat economy, upgrades, tool progression, and number formatting
-- [ ] 05 — Three zones, gates, world construction, and travel
+- [ ] 04 — Heat economy, upgrades, tool progression, and number formatting — ⚠️ built and secure; Candle pacing target not met
+- [ ] 05 — Three zones, gates, world construction, and travel — ⚠️ built and secure; Cavern pacing target not met, multiplayer performance not run
 - [ ] 06 — Thaw prestige and permanent Ember progression
 - [ ] 07 — Frozen discoveries, rarity, collection index, and chain reactions
 - [ ] 08 — UI, onboarding, feedback, rewards, codes, and accessibility
@@ -244,6 +244,65 @@ documented value. Measured across four pitches with realistic play: 6 studs gave
 (first upgrade 18–28s, in window), 8 studs gave 0.34 (~43s), 9 studs gave 0.13 (~110s). Kept
 at 6.
 
+### Phase 05 evidence
+
+Run 2026-08-02 in Studio play mode against `DataStore(IceMelt_PlayerData_DEV_v1)`.
+
+| Phase | Command / test | Result |
+|---|---|---|
+| 05 | `stylua`, `selene`, `rojo build`, `luau-lsp analyze` | **Pass**, all exit 0 |
+| 05 | Three zones visually distinct | **Pass** — Backyard is white snow with wooden fence posts, sheds, and toys; Cavern is blue ice with crystal spikes, stalagmites, and neon glow shards under dark blue fog; City is grey concrete with cars, lamp posts, and a tower skyline. Screenshots captured for each |
+| 05 | Per-zone lighting applied client-side | **Pass** — on arriving in the Cavern the client reported Brightness 1.2, FogEnd 320, Ambient RGB(48,62,92), matching `ZoneStyleConfig` exactly |
+| 05 | Locked travel cannot be forced by client remotes | **Pass** — `TravelZone` to Cavern and City both denied `ZoneLocked`; `UnlockZone` for City while the Cavern was locked denied `PreviousZoneLocked`; unknown zone denied `UnknownZone`; numeric, string, nil, and empty payloads denied `InvalidPayload`. Player stayed in Backyard with nothing unlocked |
+| 05 | Locked travel cannot be forced by teleporting | **Pass** — the character was moved straight into the locked Cavern, bypassing every remote. Melting there gave 0 accepted, 4 rejected `WrongZone`, 0 Heat. The patrol then returned the player to the Backyard arrival point with Heat unchanged and the Cavern still locked |
+| 05 | Legitimate unlock and travel | **Pass** — charged exactly 25,000 (the configured Cavern cost), moved the player there, and recomputed zone-dependent stats: Luck 1.0 → 1.5 → 1.0 → 1.5 across repeated switches |
+| 05 | Zone switching leaks nothing | **Pass** — world instance counts identical before and after repeated switching (998 descendants; 256 cells per zone; 46/70/60 props). Client effect pool stayed at exactly 48, and exactly one HUD and one overlay existed |
+| 05 | Zone-specific ice configuration | **Pass** — Cavern yielded about 42 Heat per cell against the Backyard's ~1, from the per-zone Heat and durability values |
+| 05 | Cavern unlock in 8–12 minutes | **Not met** — see below |
+| 05 | Largest zone multiplayer performance | **Not run** — needs a multi-client session |
+
+Fixed during this phase: the development overlay still overlapped the HUD. The two use
+different coordinate origins because the overlay sets `IgnoreGuiInset` and the HUD does not,
+so an offset that looks clear in one is overlapping in the other. It now sits bottom-left,
+the one corner the HUD does not use. The hub title sign was also 36 studs wide at 12 studs
+from the arrival pad and filled the entire view; it is now 26 wide at 22 studs, reading as a
+gateway banner over the route to the ice.
+
+### Balance finding, continued: income does not compound
+
+Phase 04 recorded that Candle takes ~10 minutes against a 2–4 minute target. The Cavern at
+25,000 Heat is the same problem an order of magnitude larger: at the measured base rate of
+0.58 Heat/sec that is roughly 12 hours, against an 8–12 minute target.
+
+Measuring further is not the useful step, because the cause is arithmetic and can be checked
+without playing. In `docs/03`, every upgrade's cost grows faster than its effect:
+
+| Upgrade | Cost growth | Effect growth |
+|---|---:|---:|
+| Power | ×1.32 | ×1.16 |
+| Heat Value | ×1.38 | ×1.12 |
+| Discovery Luck | ×1.75 | ×1.08 |
+| Radius | ×1.55 | +0.45 studs (linear) |
+| Crit | ×1.65 | +0.5% (linear) |
+| Auto-Melt | ×1.80 | +0.10/sec (linear) |
+
+Each successive level therefore has a longer payback period than the one before, so income
+decelerates rather than compounding. An incremental game needs the opposite: progression that
+accelerates as the player invests.
+
+Zones do not close the gap either. Income is roughly `damage / durability × HeatPerCell`, and
+the Heat-per-durability ratio barely moves between zones — 0.10 in the Backyard, 0.12 in the
+Cavern, 0.15 in the City. Measured at identical stats the Cavern was about 2.7× the Backyard's
+rate, which does not approach the 43× cost step from Candle to Cavern.
+
+This is one decision, not three, and it is the owner's: the cost curves, the zone values, and
+the tool and zone prices are all specified in `docs/03`, and that file explicitly says to tune
+from real playtests rather than formulas. The concrete options remain as recorded under Phase
+04, with one addition now that the pattern is clear:
+
+4. Make effect growth exceed cost growth on at least one track, so there is a compounding
+   route. Value at ×1.12 effect against ×1.38 cost is the clearest candidate to revisit.
+
 ## Acceptance criteria — Phase 00
 
 | Criterion | Status |
@@ -325,23 +384,38 @@ running a second play session while a multi-client test is open.
 | Tool changes visibly alter melt behaviour | **Met** |
 | Costs and effects come from shared configuration | **Met** |
 
+## Acceptance criteria — Phase 05
+
+| Criterion | Status |
+|---|---|
+| All three zones visually distinct and traversable | **Met** |
+| Cavern unlock playtest target of 8–12 minutes | **Not met** — ~12 hours at the measured base rate. Same root cause as the Phase 04 gap |
+| Locked travel cannot be forced by remotes or by teleporting | **Met** — two independent guards, both verified |
+| Zone switching does not leak fields/effects or multiply loops | **Met** |
+| Largest zone performance in a multiplayer test | **Not run** |
+
 ## Next action
 
-Two things before Phase 05:
+The economy is now the blocking issue and it affects every phase from here. Phases 06 (Thaw)
+and 07 (discoveries) both hang off Heat income, and tuning them on top of a curve that does
+not compound would mean redoing that work.
 
-1. **Play the game yourself for five minutes** and record how long Candle actually takes. The
-   scripted player reaches 0.58 Heat/sec; the ceiling is nearer 2. Only a human run settles
-   whether the economy needs changing or just the bot does.
-2. **Decide the tuning question** in the balance finding above, if the playtest confirms the
-   gap.
+1. **Decide the economy question.** The four options are recorded under the Phase 04 and 05
+   balance findings. The clearest single change is making effect growth exceed cost growth on
+   at least one track so a compounding route exists.
+2. **Play for five minutes and record real timings** for first upgrade, Candle, and Cavern.
+   Every pacing number so far comes from a scripted player, which is a poor proxy.
+3. **Run a two-player session in the Frozen City** to close the outstanding Phase 05
+   performance criterion.
 
-Then run Phase 05 — three zones, gates, world construction, and travel.
+Then run Phase 06 — Thaw prestige and permanent Ember progression.
 
-Phase 05 must preserve: the `EnvironmentConfig` production guard, the closed remote schema,
+Phase 06 must preserve: the `EnvironmentConfig` production guard, the closed remote schema,
 one development-only startup line per bootstrap, `Init` never yielding, and gameplay gated on
 `DataService.isLoaded(player)`.
 
-`StatsService.get` takes a zone key and already caches per zone, so travel should call
-`StatsService.invalidate` on arrival. `MeltService.resolveZone` currently derives the zone from
-the player's position against `WorldConfig` rectangles; travel must keep that true rather than
-trusting a client-claimed zone.
+Thaw resets Heat, upgrades, tools, and zones beyond the Backyard, so it must go through
+`PlayerStateService` mutators rather than writing the profile, and must call
+`StatsService.invalidate` and `ZoneService.travel` back to the Backyard afterwards, or the
+player will be standing in a zone they no longer own — which the ZoneService patrol would
+then bounce them out of.

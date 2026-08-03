@@ -33,10 +33,8 @@ local ConfigFolder = Shared:WaitForChild("Config", 10)
 local UtilFolder = Shared:WaitForChild("Util", 10)
 
 local BalanceConfig = require(ConfigFolder:WaitForChild("BalanceConfig", 10))
-local ContentConfig = require(ConfigFolder:WaitForChild("ContentConfig", 10))
 local GameConfig = require(ConfigFolder:WaitForChild("GameConfig", 10))
 local RemoteNames = require(ConfigFolder:WaitForChild("RemoteNames", 10))
-local WorldConfig = require(ConfigFolder:WaitForChild("WorldConfig", 10))
 local StatMath = require(UtilFolder:WaitForChild("StatMath", 10))
 local Types = require(Shared:WaitForChild("Types", 10))
 local Validate = require(UtilFolder:WaitForChild("Validate", 10))
@@ -56,12 +54,9 @@ local MeltService = {
 	Priority = 30,
 }
 
---[[
-	How far outside their zone slab a player may be and still melt in it. Generous enough
-	to cover normal movement and character height, tight enough that a teleport to another
-	zone is rejected.
-]]
-local ZONE_TOLERANCE_STUDS = 20
+-- Zone membership is defined once, in ZoneService. Keeping a second copy here would let the
+-- two drift, and a player could then be in-zone for melting but out-of-zone for enforcement.
+local ZoneService = require(script.Parent:WaitForChild("ZoneService", 10))
 
 local buckets: { [Player]: Validate.TokenBucket } = {}
 local lastSequence: { [Player]: number } = {}
@@ -131,25 +126,6 @@ local function reject(player: Player, reason: MeltRejectReason)
 	})
 end
 
---[[
-	Which zone the player is actually standing in, from their server-side position.
-	Returns nil when they are not inside any zone, which rejects the pulse.
-]]
-local function resolveZone(position: Vector3): string?
-	for _, zoneKey in ContentConfig.ZoneOrder do
-		local layout = WorldConfig.Zones[zoneKey]
-		if layout then
-			local halfX = layout.GroundSize.X / 2 + ZONE_TOLERANCE_STUDS
-			local halfZ = layout.GroundSize.Z / 2 + ZONE_TOLERANCE_STUDS
-			local delta = position - layout.Center
-			if math.abs(delta.X) <= halfX and math.abs(delta.Z) <= halfZ then
-				return zoneKey
-			end
-		end
-	end
-	return nil
-end
-
 local function onMeltPulse(player: Player, payload: any)
 	-- Type validation before anything else. Everything past here is a number we checked.
 	if type(payload) ~= "table" then
@@ -193,7 +169,7 @@ local function onMeltPulse(player: Player, payload: any)
 	-- Position is read from the server's copy of the character, never from the payload.
 	local position = root.Position
 
-	local zoneKey = resolveZone(position)
+	local zoneKey = ZoneService.zoneAt(position)
 	if not zoneKey then
 		reject(player, "OutOfRange")
 		return

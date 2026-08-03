@@ -67,6 +67,7 @@ local toolTitle: TextLabel? = nil
 local toolDetail: TextLabel? = nil
 local toolBuy: TextButton? = nil
 local panels: { [string]: Frame } = {}
+local zoneRows: { [string]: { Title: TextLabel, Detail: TextLabel, Action: TextButton } } = {}
 
 -- === Small builders ========================================================
 
@@ -236,6 +237,80 @@ local function buildToolPanel(parent: Instance)
 	toolBuy = buy
 end
 
+--[[
+	Zone list: one row per zone, showing whether it is unlocked, its cost while locked, and
+	a preview of what makes it worth entering.
+
+	Zones unlock in order, so a locked zone whose predecessor is also locked shows that
+	rather than a buy button the server would refuse.
+]]
+local function buildZonePanel(parent: Instance)
+	local frame = makePanel(parent, "Zones")
+
+	local list = Instance.new("ScrollingFrame")
+	list.Size = UDim2.fromScale(1, 1)
+	list.BackgroundTransparency = 1
+	list.BorderSizePixel = 0
+	list.ScrollBarThickness = 4
+	list.CanvasSize = UDim2.new()
+	list.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	list.Parent = frame
+
+	local layout = Instance.new("UIListLayout")
+	layout.Padding = UDim.new(0, 6)
+	layout.SortOrder = Enum.SortOrder.LayoutOrder
+	layout.Parent = list
+
+	for index, zoneKey in ContentConfig.ZoneOrder do
+		local definition = ContentConfig.Zones[zoneKey]
+
+		local card = Instance.new("Frame")
+		card.Name = zoneKey
+		card.Size = UDim2.new(1, -8, 0, 72)
+		card.BackgroundColor3 = COLOR_BG
+		card.LayoutOrder = index
+		card.Parent = list
+		corner(card, 8)
+		padding(card, 8)
+
+		local title = label(card, definition.DisplayName, 14, COLOR_TEXT)
+		title.Size = UDim2.new(1, -94, 0, 18)
+
+		local detail = label(card, "", 11, COLOR_MUTED)
+		detail.Position = UDim2.new(0, 0, 0, 20)
+		detail.Size = UDim2.new(1, -94, 0, 36)
+		detail.TextWrapped = true
+
+		local action = Instance.new("TextButton")
+		action.AnchorPoint = Vector2.new(1, 0.5)
+		action.Position = UDim2.new(1, 0, 0.5, 0)
+		action.Size = UDim2.new(0, 86, 0, 46)
+		action.BackgroundColor3 = COLOR_DENY
+		action.Font = Enum.Font.GothamBold
+		action.TextSize = 12
+		action.TextColor3 = COLOR_TEXT
+		action.Text = "-"
+		action.Parent = card
+		corner(action, 6)
+
+		action.Activated:Connect(function()
+			local current = state
+			if not current then
+				return
+			end
+			-- Unlock or travel depending on ownership. Either way the server re-checks;
+			-- this only picks which request to send.
+			if current.UnlockedZones[zoneKey] then
+				RemoteAccess.fire(RemoteNames.Name.TravelZone, { ZoneKey = zoneKey })
+			else
+				RemoteAccess.fire(RemoteNames.Name.UnlockZone, { ZoneKey = zoneKey })
+			end
+		end)
+
+		zoneRows[zoneKey] = { Title = title, Detail = detail, Action = action }
+	end
+end
+
 -- === Refresh ===============================================================
 
 local function refresh()
@@ -251,13 +326,53 @@ local function refresh()
 	end
 
 	local equipped = ContentConfig.Tools[current.EquippedTool]
+	local zone = ContentConfig.Zones[current.CurrentZone]
 	if toolLabel and equipped then
 		toolLabel.Text = string.format(
-			"%s   dmg %s   radius %.1f",
+			"%s   %s   dmg %s   radius %.1f",
+			if zone then zone.DisplayName else "-",
 			equipped.DisplayName,
 			NumberFormatter.abbreviate(current.Stats.Damage),
 			current.Stats.Radius
 		)
+	end
+
+	for index, zoneKey in ContentConfig.ZoneOrder do
+		local row = zoneRows[zoneKey]
+		local definition = ContentConfig.Zones[zoneKey]
+		if row and definition then
+			local unlocked = current.UnlockedZones[zoneKey] == true
+			local previousKey = if index > 1 then ContentConfig.ZoneOrder[index - 1] else nil
+			local previousUnlocked = previousKey == nil
+				or current.UnlockedZones[previousKey] == true
+			local here = current.CurrentZone == zoneKey
+
+			row.Title.Text = if here
+				then string.format("%s   (here)", definition.DisplayName)
+				else definition.DisplayName
+
+			row.Detail.Text = string.format(
+				"Heat per cell %s   luck %s\nIce durability %s",
+				NumberFormatter.abbreviate(definition.Heat),
+				NumberFormatter.multiplier(definition.Luck),
+				NumberFormatter.abbreviate(definition.Durability)
+			)
+
+			if unlocked then
+				row.Action.Text = if here then "Here" else "Travel"
+				row.Action.BackgroundColor3 = if here then COLOR_DENY else COLOR_AFFORD
+			elseif not previousUnlocked then
+				-- Zones unlock in order, so show the gate rather than a button the server
+				-- would refuse.
+				row.Action.Text = "Locked"
+				row.Action.BackgroundColor3 = COLOR_DENY
+			else
+				row.Action.Text = NumberFormatter.abbreviate(definition.Cost)
+				row.Action.BackgroundColor3 = if heat >= definition.Cost
+					then COLOR_AFFORD
+					else COLOR_DENY
+			end
+		end
 	end
 
 	for key, row in upgradeRows do
@@ -340,12 +455,13 @@ function HudController.Start()
 
 	buildUpgradePanel(screenGui)
 	buildToolPanel(screenGui)
+	buildZonePanel(screenGui)
 
 	-- Right-hand thumb column.
 	local buttonRow = Instance.new("Frame")
 	buttonRow.AnchorPoint = Vector2.new(1, 1)
 	buttonRow.Position = UDim2.new(1, -12, 1, -12)
-	buttonRow.Size = UDim2.new(0, 320, 0, 60)
+	buttonRow.Size = UDim2.new(0, 380, 0, 60)
 	buttonRow.BackgroundTransparency = 1
 	buttonRow.Parent = screenGui
 
@@ -356,10 +472,14 @@ function HudController.Start()
 	rowLayout.Parent = buttonRow
 
 	for _, entry in
-		{ { Name = "Upgrades", Panel = "Upgrades" }, { Name = "Tools", Panel = "Tools" } }
+		{
+			{ Name = "Upgrades", Panel = "Upgrades" },
+			{ Name = "Tools", Panel = "Tools" },
+			{ Name = "Zones", Panel = "Zones" },
+		}
 	do
 		local button = Instance.new("TextButton")
-		button.Size = UDim2.new(0, 120, 1, 0)
+		button.Size = UDim2.new(0, 118, 1, 0)
 		button.BackgroundColor3 = COLOR_PANEL
 		button.Font = Enum.Font.GothamBold
 		button.TextSize = 15
