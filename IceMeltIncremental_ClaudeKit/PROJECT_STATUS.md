@@ -505,8 +505,32 @@ Candle unlocked and equipped, 612 cells destroyed, 3,853 pulses accepted, **0 re
    pointed at ice, "Walk into the ice to melt it"), not a pricing issue, and it should not be
    used to justify further economy changes.
 4. **The Candle miss is an economy problem**, and was split between income and price rather than
-   loaded onto one value: Backyard Heat per cell 1 → 1.5 and Candle 350 → 280. Projected to land
-   near 3.2 min. **Not yet re-measured** — the confirming run is outstanding.
+   loaded onto one value: Backyard Heat per cell 1 → 1.5 and Candle 350 → 280.
+
+### Confirming run, same session
+
+A second clean run measured after the change:
+
+| Milestone | Target | Before | **After** | Verdict |
+|---|---|---|---|---|
+| First upgrade | 15–30s | 53.6s | **54.6s** | SLOW |
+| Candle | 2–4 min | 6.16 min | **3.68 min** | **IN WINDOW** |
+
+Candle is fixed and did not overshoot, so no value was walked back. Projection was 3.2 min
+against 3.68 measured — slightly optimistic, in the right place.
+
+**The first-upgrade target is now conclusively not an economy problem.** Two independent runs
+measured 53.6s and 54.6s, reproducible to within a second. The Heat rise cut the melting
+portion from roughly 23s to 15s and the total still rose by one second, which is only possible
+if orientation dominates. Roughly 37 of those 54.6 seconds are the player walking from spawn
+and reading the HUD. It belongs to Phase 08 onboarding (`docs/06`), and further economy changes
+should not be justified by it.
+
+Ice Cavern and first Thaw remain unmeasured; both need a much longer session than either run.
+
+The idle-pulse change was also observed live: over a 4 second sample with the player standing
+off the ice, 0 pulses did work and 37 found nothing in range, with no reply remote sent for any
+of the 37.
 
 Also found and fixed while setting this up: `DevCommandService.reset` wrote profile defaults
 directly without invalidating the stat cache or re-applying character state, so the melt loop

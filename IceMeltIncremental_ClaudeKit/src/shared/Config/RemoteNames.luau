@@ -22,17 +22,36 @@
 
 export type RemoteDirection = "ClientToServer" | "ServerToClient"
 
+--[[
+	`Broadcast` declares that a remote may be sent to every client at once.
+
+	It is a separate axis from Direction because direction alone does not distinguish "this
+	goes to one player" from "this goes to everyone". Every ServerToClient remote here carries
+	per-player state — a state snapshot, a melt result, an action ack — and broadcasting any
+	of them would publish one player's data to the whole server. Phase 07 is the first phase
+	to broadcast anything, so the flag is added now and enforced in `fireAllClients` rather
+	than left as a convention that one wrong constant could break.
+]]
 export type RemoteSpec = {
 	Name: string,
 	Direction: RemoteDirection,
 	Description: string,
+	Broadcast: boolean,
 }
 
-local function spec(name: string, direction: RemoteDirection, description: string): RemoteSpec
+local function spec(
+	name: string,
+	direction: RemoteDirection,
+	description: string,
+	broadcast: boolean?
+): RemoteSpec
 	return table.freeze({
 		Name = name,
 		Direction = direction,
 		Description = description,
+		-- Defaults to false, so every existing remote stays per-player untouched and
+		-- broadcasting is something a remote must opt into explicitly.
+		Broadcast = broadcast == true,
 	})
 end
 
@@ -81,6 +100,15 @@ local SPECS: { RemoteSpec } = table.freeze({
 	-- Rewards
 	spec("ClaimReward", "ClientToServer", "Claims a daily or playtime reward."),
 	spec("RedeemCode", "ClientToServer", "Redeems a promo code."),
+
+	-- Announcements
+	spec(
+		"RarityAnnouncement",
+		"ServerToClient",
+		"Legendary/Secret discovery or an announced chain. Broadcast; carries catalogue keys "
+			.. "and a player name only, never a number or a position.",
+		true
+	),
 })
 
 local byName: { [string]: RemoteSpec } = {}

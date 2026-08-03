@@ -17,7 +17,10 @@
 ]]
 
 local BalanceConfig = require(script.Parent.Parent.Config.BalanceConfig)
+local ChainConfig = require(script.Parent.Parent.Config.ChainConfig)
 local ContentConfig = require(script.Parent.Parent.Config.ContentConfig)
+local DiscoveryMath = require(script.Parent.DiscoveryMath)
+local GameConfig = require(script.Parent.Parent.Config.GameConfig)
 local MonetizationConfig = require(script.Parent.Parent.Config.MonetizationConfig)
 local RemoteNames = require(script.Parent.Parent.Config.RemoteNames)
 local Validate = require(script.Parent.Validate)
@@ -368,6 +371,330 @@ local function auditDiscoveries(problems: { Problem })
 end
 
 --[[
+	Chain definitions.
+
+	`MaxCells` is checked against the ceiling in GameConfig.Limits rather than trusted, because
+	ContentConfig is the file a designer edits to tune content and a cap that lives there is
+	not a cap.
+
+	`Announce` is checked for being strictly boolean, as an Error rather than a Warning: in
+	Luau the string "false" is truthy, so a value typed as text would announce every chain to
+	the whole server while reading as if it were switched off.
+]]
+local function auditChains(problems: { Problem })
+	local seen: { [string]: boolean } = {}
+	local largest = 0
+
+	for _, definition in ContentConfig.Chains do
+		if seen[definition.Key] then
+			add(
+				problems,
+				"Error",
+				"ContentConfig",
+				string.format("Duplicate chain key %q", definition.Key)
+			)
+		end
+		seen[definition.Key] = true
+
+		if not Validate.isFiniteInRange(definition.Radius, 1, 1000) then
+			add(
+				problems,
+				"Error",
+				"ContentConfig",
+				string.format("Chain %q has an implausible Radius", definition.Key)
+			)
+		end
+
+		if
+			not Validate.isIntegerInRange(
+				definition.MaxCells,
+				1,
+				GameConfig.Limits.MaxCellsPerChainEvent
+			)
+		then
+			add(
+				problems,
+				"Error",
+				"ContentConfig",
+				string.format(
+					"Chain %q MaxCells must be a whole number no greater than the "
+						.. "MaxCellsPerChainEvent limit of %d",
+					definition.Key,
+					GameConfig.Limits.MaxCellsPerChainEvent
+				)
+			)
+		elseif definition.MaxCells > largest then
+			largest = definition.MaxCells
+		end
+
+		if type(definition.Announce) ~= "boolean" then
+			add(
+				problems,
+				"Error",
+				"ContentConfig",
+				string.format(
+					"Chain %q Announce must be a boolean, got %s. A non-empty string is truthy "
+						.. "in Luau and would announce every one of these to the whole server.",
+					definition.Key,
+					typeof(definition.Announce)
+				)
+			)
+		end
+
+		if definition.Zone ~= nil and ContentConfig.Zones[definition.Zone] == nil then
+			add(
+				problems,
+				"Error",
+				"ContentConfig",
+				string.format(
+					"Chain %q is restricted to unknown zone %q",
+					definition.Key,
+					tostring(definition.Zone)
+				)
+			)
+		end
+
+		-- An announcing chain that can arm anywhere would put the rarest spectacle in the
+		-- tutorial zone. docs/04 restricts the announcing one to the City.
+		if definition.Announce and definition.Zone == nil then
+			add(
+				problems,
+				"Warning",
+				"ContentConfig",
+				string.format(
+					"Chain %q announces to the whole server but is not restricted to a zone",
+					definition.Key
+				)
+			)
+		end
+
+		if ChainConfig.ArmChancePerSweep[definition.Key] == nil then
+			add(
+				problems,
+				"Error",
+				"ChainConfig",
+				string.format("Chain %q has no ArmChancePerSweep entry", definition.Key)
+			)
+		end
+		if ChainConfig.MaxArmedPerZone[definition.Key] == nil then
+			add(
+				problems,
+				"Error",
+				"ChainConfig",
+				string.format("Chain %q has no MaxArmedPerZone entry", definition.Key)
+			)
+		end
+	end
+
+	-- A pulse plus the largest chain it can trigger has to fit inside one batched result.
+	local worst = GameConfig.Limits.MaxCellsPerPulse + largest
+	if worst > GameConfig.Limits.MaxCellsPerResult then
+		add(
+			problems,
+			"Error",
+			"GameConfig",
+			string.format(
+				"A full pulse (%d cells) plus the largest chain (%d) is %d, above the "
+					.. "MaxCellsPerResult limit of %d",
+				GameConfig.Limits.MaxCellsPerPulse,
+				largest,
+				worst,
+				GameConfig.Limits.MaxCellsPerResult
+			)
+		)
+	end
+end
+
+--[[
+	Proves the discovery weight table is well formed at sampled luck values.
+
+	This is the check that makes "luck cannot exceed configured caps or create invalid weights"
+	a demonstrated property rather than an assertion. It evaluates the very function the roll
+	uses, which is the whole reason that function lives in a shared module: a second
+	implementation here would be the drift this audit exists to catch.
+
+	The last samples deliberately go past the configured ceiling and into non-finite values, to
+	prove the clamp holds and that a corrupt luck degrades to the documented baseline rather
+	than poisoning the table.
+]]
+local function auditDiscoveryWeights(problems: { Problem })
+	local maxLuck = BalanceConfig.Discovery.MaxLuck
+	local samples = { 0, 1, 2, 10, maxLuck, maxLuck * 4, -1, 0 / 0 }
+
+	for _, zoneKey in ContentConfig.ZoneOrder do
+		for _, luck in samples do
+			local rows = DiscoveryMath.rarityRows(zoneKey, luck)
+
+			if #rows == 0 then
+				add(
+					problems,
+					"Error",
+					"ContentConfig",
+					string.format(
+						"Zone %q produced no discovery weights at luck %s",
+						zoneKey,
+						tostring(luck)
+					)
+				)
+				continue
+			end
+
+			local total = 0
+			for _, row in rows do
+				if
+					not Validate.isFiniteInRange(
+						row.Weight,
+						0,
+						BalanceConfig.Discovery.MaxRarityWeight
+					)
+				then
+					add(
+						problems,
+						"Error",
+						"BalanceConfig",
+						string.format(
+							"Zone %q rarity %q produced weight %s at luck %s, outside [0, %s]",
+							zoneKey,
+							row.Rarity,
+							tostring(row.Weight),
+							tostring(luck),
+							tostring(BalanceConfig.Discovery.MaxRarityWeight)
+						)
+					)
+				end
+				if not Validate.isFiniteInRange(row.Probability, 0, 1) then
+					add(
+						problems,
+						"Error",
+						"BalanceConfig",
+						string.format(
+							"Zone %q rarity %q produced probability %s at luck %s",
+							zoneKey,
+							row.Rarity,
+							tostring(row.Probability),
+							tostring(luck)
+						)
+					)
+				end
+				total += row.Probability
+			end
+
+			if math.abs(total - 1) > 1e-6 then
+				add(
+					problems,
+					"Error",
+					"BalanceConfig",
+					string.format(
+						"Zone %q probabilities sum to %s at luck %s, not 1",
+						zoneKey,
+						tostring(total),
+						tostring(luck)
+					)
+				)
+			end
+
+			-- Common must survive every luck value. This is the floor that stops a high-luck
+			-- player being locked out of the commonest tier entirely.
+			local commonKey = BalanceConfig.Discovery.RarityOrder[1]
+			for _, row in rows do
+				if row.Rarity == commonKey and row.Probability <= 0 then
+					add(
+						problems,
+						"Error",
+						"BalanceConfig",
+						string.format(
+							"Zone %q drove %s to zero at luck %s",
+							zoneKey,
+							commonKey,
+							tostring(luck)
+						)
+					)
+				end
+			end
+		end
+	end
+
+	-- The floor exists to protect Common specifically, so its luck exponent must be zero.
+	local commonKey = BalanceConfig.Discovery.RarityOrder[1]
+	if BalanceConfig.Discovery.RarityLuckExponent[commonKey] ~= 0 then
+		add(
+			problems,
+			"Error",
+			"BalanceConfig",
+			string.format(
+				"RarityLuckExponent[%q] must be 0 so luck cannot scale the commonest tier",
+				commonKey
+			)
+		)
+	end
+
+	if BalanceConfig.Discovery.MinLuck <= 0 then
+		add(
+			problems,
+			"Error",
+			"BalanceConfig",
+			"Discovery.MinLuck must be above 0. clampFinite returns the minimum for a "
+				.. "non-finite input, so a floor of 0 would silently lock a corrupt luck to "
+				.. "100% Common."
+		)
+	end
+
+	-- Every rarity that carries weight should be reachable somewhere, or its weight is a lie.
+	local reachable: { [string]: boolean } = {}
+	for _, zoneKey in ContentConfig.ZoneOrder do
+		for _, rarity in DiscoveryMath.zoneRarities(zoneKey) do
+			reachable[rarity] = true
+		end
+	end
+	for _, rarity in BalanceConfig.Discovery.RarityOrder do
+		if not reachable[rarity] then
+			add(
+				problems,
+				"Warning",
+				"ContentConfig",
+				string.format(
+					"Rarity %q has a weight but no discovery in any zone, so it can never be rolled",
+					rarity
+				)
+			)
+		end
+		if BalanceConfig.Discovery.RarityLuckExponent[rarity] == nil then
+			add(
+				problems,
+				"Error",
+				"BalanceConfig",
+				string.format("Rarity %q has no RarityLuckExponent entry", rarity)
+			)
+		end
+		if BalanceConfig.Discovery.DuplicateHeatCells[rarity] == nil then
+			add(
+				problems,
+				"Error",
+				"BalanceConfig",
+				string.format("Rarity %q has no DuplicateHeatCells entry", rarity)
+			)
+		end
+	end
+
+	-- Every zone needs its commonest tier present, or the roll's downward fallback has
+	-- nothing to land on.
+	for _, zoneKey in ContentConfig.ZoneOrder do
+		if #DiscoveryMath.zoneDiscoveries(zoneKey, commonKey) == 0 then
+			add(
+				problems,
+				"Error",
+				"ContentConfig",
+				string.format(
+					"Zone %q has no %s discovery, so the roll fallback has nothing to land on",
+					zoneKey,
+					commonKey
+				)
+			)
+		end
+	end
+end
+
+--[[
 	Marketplace IDs must be a whole positive number or exactly 0. A 0 means "not created
 	yet" and must disable the item safely; anything else (a float, a negative, a string
 	pasted from the dashboard with stray characters) would reach MarketplaceService and
@@ -415,8 +742,31 @@ end
 
 local function auditRemotes(problems: { Problem })
 	local seen: { [string]: boolean } = {}
+	local broadcasts = 0
 
 	for _, remoteSpec in RemoteNames.Specs do
+		--[[
+			Broadcast is the permission that lets a remote reach every client at once. Every
+			other outbound remote carries one player's data, so a broadcast flag on the wrong
+			one would publish that data to the whole server.
+		]]
+		if remoteSpec.Broadcast then
+			broadcasts += 1
+			if remoteSpec.Direction ~= "ServerToClient" then
+				add(
+					problems,
+					"Error",
+					"RemoteNames",
+					string.format(
+						"Remote %q is declared Broadcast but is %s. Only outbound remotes can "
+							.. "be broadcast.",
+						remoteSpec.Name,
+						remoteSpec.Direction
+					)
+				)
+			end
+		end
+
 		if seen[remoteSpec.Name] then
 			add(
 				problems,
@@ -465,6 +815,24 @@ local function auditRemotes(problems: { Problem })
 			)
 		end
 	end
+
+	--[[
+		Broadcast remotes are meant to be exceptional. More than one is not wrong on its own,
+		but it is worth surfacing: every extra one is another channel that reaches every client
+		and therefore another place a per-player value could leak.
+	]]
+	if broadcasts > 1 then
+		add(
+			problems,
+			"Warning",
+			"RemoteNames",
+			string.format(
+				"%d remotes are declared Broadcast. Each one reaches every client, so keep the "
+					.. "set as small as possible.",
+				broadcasts
+			)
+		)
+	end
 end
 
 --[[
@@ -478,6 +846,8 @@ function ConfigAudit.run(): AuditReport
 	auditTools(problems)
 	auditZones(problems)
 	auditDiscoveries(problems)
+	auditDiscoveryWeights(problems)
+	auditChains(problems)
 	auditMonetization(problems)
 	auditRemotes(problems)
 

@@ -150,28 +150,34 @@ local DISCOVERIES: { DiscoveryDefinition } = table.freeze({
 	Chain reactions award normal validated rewards with a hard server cap per event, so
 	MaxCells is a security limit rather than a tuning knob. See docs/04.
 ]]
+--[[
+	Constructor for the same reason `discovery` has one: Zone is a string-literal union, and a
+	bare literal in a table widens to `string` and loses the check.
+]]
+local function chain(
+	key: string,
+	displayName: string,
+	radius: number,
+	maxCells: number,
+	announce: boolean,
+	zone: Types.ZoneKey?
+): ChainDefinition
+	return table.freeze({
+		Key = key,
+		DisplayName = displayName,
+		Radius = radius,
+		MaxCells = maxCells,
+		Announce = announce,
+		Zone = zone,
+	})
+end
+
 local CHAINS: { ChainDefinition } = table.freeze({
-	table.freeze({
-		Key = "HeatPocket",
-		DisplayName = "Heat Pocket",
-		Radius = 12,
-		MaxCells = 12,
-		Announce = false,
-	}),
-	table.freeze({
-		Key = "LavaCapsule",
-		DisplayName = "Lava Capsule",
-		Radius = 26,
-		MaxCells = 40,
-		Announce = false,
-	}),
-	table.freeze({
-		Key = "UnstableReactor",
-		DisplayName = "Unstable Reactor",
-		Radius = 48,
-		MaxCells = 120,
-		Announce = true,
-	}),
+	chain("HeatPocket", "Heat Pocket", 12, 12, false, nil),
+	chain("LavaCapsule", "Lava Capsule", 26, 40, false, nil),
+	-- docs/04 calls this "a rare city chain with server announcement", so the zone
+	-- restriction is configuration that ConfigAudit enforces rather than prose.
+	chain("UnstableReactor", "Unstable Reactor", 48, 120, true, "City"),
 })
 
 return table.freeze({

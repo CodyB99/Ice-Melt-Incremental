@@ -77,6 +77,34 @@ export type ChainDefinition = {
 	Radius: number,
 	MaxCells: number,
 	Announce: boolean,
+	--[[
+		Zone this chain can arm in, or nil for any zone. docs/04 calls the Unstable Reactor a
+		"rare city chain", so that restriction lives in configuration where ConfigAudit can
+		enforce it, rather than staying prose.
+	]]
+	Zone: ZoneKey?,
+}
+
+--[[
+	What the server broadcasts for a Legendary/Secret discovery or an announced chain.
+
+	Deliberately a pure value table of catalogue keys and a display name, with no numbers at
+	all: no UserId, no Heat, no Ember or luck value, no position, no count, and no free text.
+	The client composes every visible string locally from ContentConfig and refuses to render
+	a key it does not recognise. That makes "announcements reveal no sensitive data" checkable
+	by iterating the payload rather than by reading the call sites.
+]]
+export type AnnouncementKind = "Discovery" | "Chain"
+
+export type AnnouncementPayload = {
+	Kind: AnnouncementKind,
+	Key: string,
+	-- Plain strings rather than the unions, matching how ZoneKey is already carried on
+	-- MeltResult: Luau widens a singleton union read out of a mutable table, so the union
+	-- belongs at the definition rather than on the wire.
+	Rarity: string?,
+	ZoneKey: string,
+	PlayerName: string,
 }
 
 -- === Persistence ===========================================================
@@ -147,6 +175,15 @@ export type ReplicatedPlayerState = {
 	EquippedTool: number,
 	UnlockedZones: { [string]: boolean },
 	DiscoveryCount: number,
+	--[[
+		The player's own collection, key to count.
+
+		Deliberately published, unlike every other profile field held back by the allow-list:
+		a collection index has to know which of the twenty are owned to draw silhouettes and
+		per-zone completion, and this is the player's own progress rather than an anti-exploit
+		counter or anything about anyone else. Bounded at twenty keys by the catalogue.
+	]]
+	Discoveries: { [string]: number },
 	Stats: DerivedStats,
 	-- Where the server believes the player is. Derived from position, never from a claim.
 	CurrentZone: string,
@@ -175,10 +212,20 @@ export type MeltCellResult = {
 	Damage: number,
 	Destroyed: boolean,
 	Critical: boolean,
+	-- Destroyed by chain propagation rather than by the player's melt radius.
+	Chain: boolean?,
 }
 
 --[[
 	Batched on purpose: one remote per pulse, never one per cell. See docs/02.
+
+	Chains and discoveries ride this same batch rather than getting remotes of their own, so
+	a 120-cell chain is still exactly one message.
+
+	`ChainOriginCellId` is a cell id, never a Vector3, and `ChainKey` names one of the three
+	configured chains rather than carrying a radius. Both follow the rule that no coordinate
+	and no free number crosses the wire: the client resolves the id to a real cell part it
+	already knows about, so a malformed result cannot place a 48-stud effect anywhere it likes.
 ]]
 export type MeltResult = {
 	Sequence: number,
@@ -186,6 +233,9 @@ export type MeltResult = {
 	Cells: { MeltCellResult },
 	HeatGranted: number,
 	DiscoveryKey: string?,
+	DiscoveryIsNew: boolean?,
+	ChainKey: string?,
+	ChainOriginCellId: number?,
 }
 
 export type MeltRejectReason =

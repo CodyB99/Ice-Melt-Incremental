@@ -29,6 +29,7 @@ local UtilFolder = Shared:WaitForChild("Util", 10)
 
 local BalanceConfig = require(ConfigFolder:WaitForChild("BalanceConfig", 10))
 local ContentConfig = require(ConfigFolder:WaitForChild("ContentConfig", 10))
+local DataConfig = require(ConfigFolder:WaitForChild("DataConfig", 10))
 local GameConfig = require(ConfigFolder:WaitForChild("GameConfig", 10))
 local RemoteNames = require(ConfigFolder:WaitForChild("RemoteNames", 10))
 local Types = require(Shared:WaitForChild("Types", 10))
@@ -94,6 +95,17 @@ local function buildSnapshot(player: Player, profile: PlayerProfile): Replicated
 		EquippedTool = profile.EquippedTool,
 		UnlockedZones = table.clone(profile.UnlockedZones),
 		DiscoveryCount = countDiscoveries(profile),
+		--[[
+			The player's own collection, published deliberately.
+
+			This is the one field added to the allow-list since Phase 02, and it is a
+			considered exception rather than a relaxation: a collection index has to know
+			which of the twenty are owned to draw silhouettes and per-zone completion, it is
+			the player's own progress, and the catalogue bounds it at twenty keys. Everything
+			the allow-list exists to hold back — ReceiptHistory, LifetimeHeat, RunHeat,
+			RewardState, Settings, and every anti-exploit counter — stays server-side.
+		]]
+		Discoveries = table.clone(profile.Discoveries),
 		-- Finished numbers, not inputs. The client shows what the server decided rather
 		-- than recomputing the balance curves itself. Stats are zone-dependent, so they are
 		-- resolved for the zone the player is actually standing in.
@@ -326,13 +338,24 @@ function PlayerStateService.unlockZone(player: Player, zoneKey: string): boolean
 end
 
 --[[
-	Records a discovery. Returns true when it was the player's first of that kind, which
-	is what the reveal UI needs to know.
+	Records a discovery.
+
+	Returns (granted, isFirst).
+
+	Two return values rather than one because a single boolean could not distinguish "already
+	owned" from "not recorded at all". It previously returned false for a missing profile, an
+	unknown key, AND a duplicate, so a caller reading false as "duplicate" would have paid the
+	duplicate reward for an award that was never written. `isFirst` is only meaningful when
+	`granted` is true.
+
+	The count is clamped on write. ProfileSchema drops any count outside its configured range
+	on load, so letting the counter run past the ceiling would be silent data loss on the next
+	rejoin rather than a saturating value.
 ]]
-function PlayerStateService.addDiscovery(player: Player, key: string): boolean
+function PlayerStateService.addDiscovery(player: Player, key: string): (boolean, boolean)
 	local profile = DataService.getProfile(player)
 	if not profile then
-		return false
+		return false, false
 	end
 
 	local known = false
@@ -344,15 +367,15 @@ function PlayerStateService.addDiscovery(player: Player, key: string): boolean
 	end
 	if not known then
 		warn(string.format("[IceMelt] addDiscovery got unknown discovery %q", tostring(key)))
-		return false
+		return false, false
 	end
 
 	local previous = profile.Discoveries[key] or 0
-	profile.Discoveries[key] = previous + 1
+	profile.Discoveries[key] = math.min(previous + 1, DataConfig.MaxDiscoveryCount)
 
 	DataService.markDirty(player)
 	PlayerStateService.queuePush(player)
-	return previous == 0
+	return true, previous == 0
 end
 
 --[[

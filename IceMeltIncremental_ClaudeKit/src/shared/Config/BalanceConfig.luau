@@ -44,6 +44,21 @@ local Types = require(script.Parent.Parent.Types)
 
 type UpgradeDefinition = Types.UpgradeDefinition
 
+--[[
+	Annotated rather than left to inference. A bare string literal inside a table widens to
+	`string`, which loses the Rarity union and forces every consumer to cast it back — and a
+	cast is exactly where a typo like "Mythic" would slip through. Declaring the element type
+	here means an invalid rarity fails to typecheck in this file instead. Same reasoning as
+	the `discovery()` and `spec()` constructors elsewhere.
+
+	Frozen as a separate statement rather than `table.freeze({...})`, because freeze is generic
+	over its argument: the literal is inferred as `{string}` before the annotation can apply,
+	and the union is lost again.
+]]
+local RARITY_ORDER: { Types.Rarity } =
+	{ "Common", "Uncommon", "Rare", "Epic", "Legendary", "Secret" }
+table.freeze(RARITY_ORDER)
+
 local UPGRADES: { [string]: UpgradeDefinition } = table.freeze({
 	Power = table.freeze({
 		Key = "Power" :: Types.UpgradeKey,
@@ -152,15 +167,93 @@ return table.freeze({
 			Legendary = 2,
 			Secret = 0.5,
 		}),
-		RarityOrder = table.freeze({
-			"Common",
-			"Uncommon",
-			"Rare",
-			"Epic",
-			"Legendary",
-			"Secret",
-		}),
+		RarityOrder = RARITY_ORDER,
 		-- Luck scales the rare end only; it must never be able to drive Common to zero.
 		MinCommonWeight = 1,
+
+		--[[
+			How luck bends the weight table: weight = base * (luck ^ exponent).
+
+			Common's exponent is exactly 0, so luck multiplies it by 1 and the note above
+			becomes structurally true rather than aspirational. It also means the distribution
+			at luck 1.0 is byte-for-byte the docs/04 baseline.
+		]]
+		RarityLuckExponent = table.freeze({
+			Common = 0,
+			Uncommon = 0.2,
+			Rare = 0.4,
+			Epic = 0.6,
+			Legendary = 0.8,
+			Secret = 1.0,
+		}),
+
+		--[[
+			Luck is clamped into [MinLuck, MaxLuck] before it touches a weight.
+
+			MinLuck is 1 rather than 0 on purpose. Validate.clampFinite returns the minimum
+			for any non-finite input, so a NaN luck with a floor of 0 would make every
+			above-Common multiplier 0^k = 0 and silently lock the player to 100% Common with
+			no error. A floor of 1 degrades a corrupt value to the documented baseline
+			instead, which is the correct direction to fail in.
+
+			MaxLuck 250 sits above the highest reachable value: Luck upgrade at its cap of 40
+			levels is 1.08^40 = 21.72, times the City's 2.25 zone luck = 48.88.
+		]]
+		MinLuck = 1,
+		MaxLuck = 250,
+		MaxRarityWeight = 1e6,
+
+		--[[
+			Chance that one destroyed cell yields a discovery, before any capping.
+
+			docs/ never states this number; it is a local engineering choice in the same class
+			as the ice field pitch. Chosen against the measured early rate of roughly one cell
+			a second, which puts a discovery around every fifty seconds for a new player:
+			frequent enough to teach the mechanic in a first session, rare enough that the
+			reveal still reads as an event.
+
+			Luck adjusts the weight table only and must never scale this. Otherwise a future
+			luck boost would multiply discovery volume and announcement pressure together.
+		]]
+		BaseChancePerCell = 0.02,
+
+		--[[
+			Cells credited toward one event's roll, capped.
+
+			Equal to the Heat Pocket's MaxCells, so the smallest chain is fully credited while
+			an uncapped 120-cell chain cannot become a 91% guaranteed discovery. That matters
+			because docs/05 sells a Chain Reaction Charge product; uncapped, that product would
+			be a paid loot box.
+		]]
+		MaxCreditedCellsPerEvent = 12,
+
+		--[[
+			Heat paid for a discovery, denominated in zone-cell-equivalents rather than an
+			absolute figure, so it inherits zone Heat, the Value upgrade and the Ember
+			multiplier for free and introduces no new constant into the economy.
+
+			Deliberately sub-linear against the rarity step, which keeps the reward stream a
+			small fraction of melt income. docs/08 lists DiscoveryReward as an economy source,
+			so a discovery must pay something; this is sized so it cannot become a progression
+			route while the economy review is open.
+		]]
+		DuplicateHeatCells = table.freeze({
+			Common = 2,
+			Uncommon = 3,
+			Rare = 5,
+			Epic = 8,
+			Legendary = 12,
+			Secret = 20,
+		}),
+		FirstOfKindMultiplier = 3,
+
+		-- Only these announce to the whole server. Straight from docs/06.
+		AnnouncedRarities = table.freeze({
+			Legendary = true,
+			Secret = true,
+		}),
+		-- Announce only the player's first of a kind. With five announceable discoveries in
+		-- the catalogue, a profile can produce at most five announcements in its lifetime.
+		AnnounceFirstOnly = true,
 	}),
 })

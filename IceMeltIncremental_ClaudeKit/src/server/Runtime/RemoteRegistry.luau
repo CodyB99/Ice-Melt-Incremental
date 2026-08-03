@@ -165,6 +165,17 @@ function RemoteRegistry.fireClient(name: string, player: Player, ...: any)
 	RemoteRegistry.get(name):FireClient(player, ...)
 end
 
+--[[
+	Broadcasts to every client.
+
+	Direction is necessary but not sufficient here. Every other ServerToClient remote carries
+	one player's data — a state snapshot, a melt result, an action ack — so being outbound
+	says nothing about whether a message is safe to send to everyone. The Broadcast flag is
+	the actual permission, and without it `fireAllClients(RemoteNames.Name.PlayerState, snap)`
+	would be one constant away from publishing a player's entire replicated state to the whole
+	server. That is the highest-impact cross-player leak this codebase could have, and until
+	Phase 07 nothing called this function at all.
+]]
 function RemoteRegistry.fireAllClients(name: string, ...: any)
 	requireBuilt()
 
@@ -175,6 +186,14 @@ function RemoteRegistry.fireAllClients(name: string, ...: any)
 			"[IceMelt] RemoteRegistry: %q is %s and cannot be broadcast",
 			name,
 			remoteSpec.Direction
+		)
+	)
+	assert(
+		remoteSpec.Broadcast,
+		string.format(
+			"[IceMelt] RemoteRegistry: %q is not declared Broadcast and must not be sent to "
+				.. "every client. It carries per-player data.",
+			name
 		)
 	)
 

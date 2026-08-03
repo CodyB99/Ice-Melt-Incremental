@@ -43,6 +43,8 @@ local ServerRoot = script.Parent.Parent
 local RemoteRegistry =
 	require(ServerRoot:WaitForChild("Runtime", 10):WaitForChild("RemoteRegistry", 10))
 local DataService = require(script.Parent:WaitForChild("DataService", 10))
+local DiscoveryService = require(script.Parent:WaitForChild("DiscoveryService", 10))
+local EconomyService = require(script.Parent:WaitForChild("EconomyService", 10))
 local IceFieldService = require(script.Parent:WaitForChild("IceFieldService", 10))
 local PlayerStateService = require(script.Parent:WaitForChild("PlayerStateService", 10))
 local StatsService = require(script.Parent:WaitForChild("StatsService", 10))
@@ -204,8 +206,17 @@ local function applyMelt(
 	totalHeat = Validate.clampFinite(totalHeat, 0, BalanceConfig.Melt.MaxHeatPerPulse)
 
 	if totalHeat > 0 then
-		-- The only path by which Heat ever changes.
-		PlayerStateService.addHeat(player, totalHeat)
+		--[[
+			Routed through EconomyService rather than straight to addHeat, so melt income
+			appears in the ledger alongside every other source and sink.
+
+			Behaviourally identical — grant re-checks isLoaded and a positive amount, both
+			already true here, then calls the same addHeat — but the ledger was previously
+			recording zone unlocks, tool unlocks and upgrade purchases while showing no melt
+			income at all. Phase 07 adds DiscoveryReward and ChainReaction to it, and a ledger
+			that showed those without the melt that produced them would be actively misleading.
+		]]
+		EconomyService.grant(player, totalHeat, "IceMelt")
 	end
 
 	return results, totalHeat, destroyed
@@ -316,16 +327,39 @@ local function onMeltPulse(player: Player, payload: any)
 		return
 	end
 
+	--[[
+		Discovery roll, from the server's own count of cells that made the alive-to-dead
+		transition. The award, its Heat, its save and its announcement all happen inside this
+		call and are complete before the reply is built, so the reveal the client draws is a
+		consequence of an award that already exists rather than a promise of one.
+
+		Wrapped: a fault in the discovery path must not cost the player the melt they earned.
+	]]
+	local rolled, discovery =
+		pcall(DiscoveryService.rollForMeltEvent, player, zoneKey, meltStats, destroyed, 0)
+	if not rolled then
+		warn(
+			string.format("[IceMelt] MeltService: discovery roll errored: %s", tostring(discovery))
+		)
+		discovery = nil
+	end
+
+	local discoveryHeat = if discovery then discovery.HeatAwarded else 0
+
 	stats.Accepted += 1
 	stats.CellsDestroyed += destroyed
-	stats.HeatGranted += totalHeat
+	stats.HeatGranted += totalHeat + discoveryHeat
 
 	-- One remote for the whole pulse, carrying every cell touched.
 	RemoteRegistry.fireClient(RemoteNames.Name.MeltResult, player, {
 		Sequence = sequence,
 		ZoneKey = zoneKey,
 		Cells = results,
-		HeatGranted = totalHeat,
+		-- The discovery's Heat is folded in because the client shows one popup per batch, not
+		-- one per source. The grant itself already happened, inside the roll.
+		HeatGranted = totalHeat + discoveryHeat,
+		DiscoveryKey = if discovery then discovery.Key else nil,
+		DiscoveryIsNew = if discovery then discovery.IsNew else nil,
 	})
 end
 
