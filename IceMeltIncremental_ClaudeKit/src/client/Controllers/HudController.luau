@@ -575,6 +575,19 @@ function HudController.Start()
 	buildZonePanel(screenGui)
 	buildThawPanel(screenGui)
 
+	--[[
+		The collection index lives in DiscoveryController, which owns the reveal card and the
+		announcement banner too, but its panel belongs to the HUD's toggle system so only one
+		panel is ever open and the play area stays clear.
+	]]
+	local discoveryController = ControllersFolder:FindFirstChild("DiscoveryController")
+	if discoveryController then
+		local controller = require(discoveryController)
+		controller.buildPanel(makePanel(screenGui, "Discoveries"))
+	else
+		warn("[IceMelt] HudController: DiscoveryController missing; no collection index")
+	end
+
 	-- Thaw previews and results arrive on ActionResult.
 	RemoteAccess.connect(RemoteNames.Name.ActionResult, function(result: any)
 		if type(result) ~= "table" then
@@ -593,37 +606,51 @@ function HudController.Start()
 		end
 	end)
 
-	-- Right-hand thumb column.
+	--[[
+		Right-hand thumb rail.
+
+		A grid rather than a single row. A fifth entry at the old 88px width would have been
+		472px of buttons, wider than a 375px phone in portrait, and the row was already
+		overflowing its own frame at four. Three per row wraps instead: 3 x 110 + 2 x 8 = 346
+		wide, which fits, and 40px rows keep every target at a usable touch size.
+
+		Sized for six from the start, so nothing shifts under the player's thumb when the Shop
+		arrives in Phase 09.
+	]]
 	local buttonRow = Instance.new("Frame")
 	buttonRow.AnchorPoint = Vector2.new(1, 1)
 	buttonRow.Position = UDim2.new(1, -12, 1, -12)
-	-- Four 88px buttons with 8px gaps is 376. The row was 380 wide holding 424 of buttons,
-	-- so the leftmost one hung outside its own frame and off the edge of a portrait phone.
-	buttonRow.Size = UDim2.new(0, 376, 0, 60)
+	buttonRow.Size = UDim2.new(0, 346, 0, 88)
 	buttonRow.BackgroundTransparency = 1
 	buttonRow.Parent = screenGui
 
-	local rowLayout = Instance.new("UIListLayout")
-	rowLayout.FillDirection = Enum.FillDirection.Horizontal
-	rowLayout.Padding = UDim.new(0, 8)
+	local rowLayout = Instance.new("UIGridLayout")
+	rowLayout.CellSize = UDim2.new(0, 110, 0, 40)
+	rowLayout.CellPadding = UDim2.new(0, 8, 0, 8)
+	rowLayout.FillDirectionMaxCells = 3
 	rowLayout.HorizontalAlignment = Enum.HorizontalAlignment.Right
+	rowLayout.VerticalAlignment = Enum.VerticalAlignment.Bottom
+	rowLayout.SortOrder = Enum.SortOrder.LayoutOrder
 	rowLayout.Parent = buttonRow
 
-	for _, entry in
+	for order, entry in
 		{
 			{ Name = "Upgrades", Panel = "Upgrades" },
 			{ Name = "Tools", Panel = "Tools" },
 			{ Name = "Zones", Panel = "Zones" },
 			{ Name = "Thaw", Panel = "Thaw" },
+			{ Name = "Discoveries", Panel = "Discoveries" },
 		}
 	do
 		local button = Instance.new("TextButton")
-		button.Size = UDim2.new(0, 88, 1, 0)
 		button.BackgroundColor3 = COLOR_PANEL
 		button.Font = Enum.Font.GothamBold
-		button.TextSize = 15
+		-- Smaller than the others so "Discoveries" fits its cell without truncating.
+		button.TextSize = 14
+		button.TextScaled = false
 		button.TextColor3 = COLOR_TEXT
 		button.Text = entry.Name
+		button.LayoutOrder = order
 		button.Parent = buttonRow
 		corner(button, 10)
 		button.Activated:Connect(function()

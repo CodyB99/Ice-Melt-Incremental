@@ -11,7 +11,7 @@ Updated: 2026-08-02
 - [ ] 04 — Heat economy, upgrades, tool progression, and number formatting — ⚠️ built and secure; Candle pacing target not met
 - [ ] 05 — Three zones, gates, world construction, and travel — ⚠️ built and secure; Cavern pacing target not met, multiplayer performance not run
 - [ ] 06 — Thaw prestige and permanent Ember progression — ⚠️ built and secure; first-Thaw pacing target not met
-- [ ] 07 — Frozen discoveries, rarity, collection index, and chain reactions
+- [ ] 07 — Frozen discoveries, rarity, collection index, and chain reactions — ⚠️ all five acceptance criteria met and verified; chain anticipation/wave effects and the reduced-motion toggle deferred to Phase 08
 - [ ] 08 — UI, onboarding, feedback, rewards, codes, and accessibility
 - [ ] 09 — Passes, developer products, shop, and safe receipts
 - [ ] 10 — Analytics, exploit hardening, performance, and device QA
@@ -439,6 +439,57 @@ running a second play session while a multi-client test is open.
 | Locked travel cannot be forced by remotes or by teleporting | **Met** — two independent guards, both verified |
 | Zone switching does not leak fields/effects or multiply loops | **Met** |
 | Largest zone performance in a multiplayer test | **Not run** |
+
+### Phase 07 evidence
+
+Run 2026-08-03 in Studio play mode against `DataStore(IceMelt_PlayerData_DEV_v1)`.
+
+Startup, verbatim shape: **15 remotes** (up from 14, one added), **15 services**, **7
+controllers**, `config=0E/1W` — every new audit rule passes and the only warning is still the
+eleven unconfigured marketplace IDs.
+
+| Phase | Command / test | Result |
+|---|---|---|
+| 07 | `stylua`, `selene`, `rojo build`, `luau-lsp analyze` | **Pass**, all exit 0 |
+| 07 | All twenty discoveries obtainable only in valid zones | **Pass** — enumerated rather than sampled: Backyard 6, Cavern 7, City 7 = 20, **violations: none**. The Backyard has no Secret tier at all, so an absent tier is never given weight rather than being rolled and filtered |
+| 07 | Luck cannot exceed caps or create invalid weights | **Pass** — luck 1.0 reproduces the `docs/04` baseline exactly (55/25/12/5.5/2/0.5); luck 48.88 (the highest reachable) gives Common 18.81% / Legendary 15.36% / Secret 8.36%; luck 1000 clamps to 250; luck −1 clamps to 1; **NaN degrades to the baseline** rather than locking the player to 100% Common. Proven at startup too, over 3 zones × 8 luck samples, using the same function the roll uses |
+| 07 | Duplicate behaviour designed and tested | **Pass** — first Frozen Coin 24.96 Heat, duplicate 8.32, exactly one third, matching `FirstOfKindMultiplier = 3`. Both awarded; distinct count stayed 1. Presentation differs from the award: duplicates below Rare show no card but are still paid |
+| 07 | Award and save before the reveal | **Pass** — the roll writes the profile, grants Heat, schedules a save, logs analytics and announces, all before `MeltResult` is built. Verified by construction: `forceDiscovery` awards with no `MeltResult` sent at all, and the collection index still updated |
+| 07 | Roll is per destroyed cell, not per pulse | **Pass** — 4 cells destroyed produced 4 roll events, 0 awards, at the configured 2%/cell |
+| 07 | Legendary/Secret announcements reveal nothing sensitive, rate-limited | **Pass** — 5 awards produced **1 sent, 4 ineligible**. Only the Legendary *first of kind* announced; the Legendary duplicate did not. Rendered client-side as "Aero found Tiny Mammoth (Legendary)" from catalogue keys; the payload carries no number of any kind |
+| 07 | Funnel event not corrupted | **Pass** — `FirstDiscoveryFound` fired **once** across three first-of-kind awards, because it is gated on the distinct count reaching 1 rather than on the per-kind flag |
+| 07 | Chain caps hold | **Pass** — Heat Pocket 9 cells (cap 12), Lava Capsule exactly **40** (cap 40, binding), Unstable Reactor 118 (cap 120). Every one within cap, each delivered as a **single** batched remote |
+| 07 | Chains cannot be replayed for duplicate rewards | **Pass** — one seed fired once for 40 cells and 166.38 Heat, then two further attempts on the same seed fired nothing and paid **0.00** |
+| 07 | Chains do not cascade | **Pass** — the seed is consumed before any cell is damaged, and any seed the blast passes over is cleared as it is destroyed. Armed-seed count did not grow across firings |
+| 07 | Zone-restricted chain honoured by natural arming | **Pass** — the sweep armed only Heat Pockets and Lava Capsules across all three zones; the City-only Unstable Reactor never armed elsewhere. Violations: none |
+| 07 | Collection index, silhouettes, zone completion | **Pass** — 20 rows, 16 silhouetted and 4 revealed at the time of the check, per-zone headers reading "Frozen Backyard 4/6", "Ice Cavern 0/7", "Frozen City 0/7", and a "Discoveries 4/20" total |
+| 07 | Reveal card, including duplicate suppression | **Pass** — Epic first-of-kind drew "NEW DISCOVERY \| Golden Key \| ★ \| Epic"; a Rare duplicate drew "ALREADY FOUND \| Snow Globe \| ▲ \| Rare \| x2"; a **Common duplicate drew nothing**; an **unknown key drew nothing** |
+| 07 | Rarity is not carried by colour alone | **Pass** — word, glyph and pip count are all present, with colour applied last. Pips are `Frame`s rather than characters so a font substitution cannot take out two channels at once |
+| 07 | HUD fits a fifth panel button | **Pass** — the rail wraps 3 + 2 at 110×40 in a 346×88 frame. The previous single row held 424px of buttons in a 380px frame |
+
+Three defects in existing code were fixed here because Phase 07 lands on top of them:
+
+1. **`addDiscovery` returned `false` for three different outcomes** — no profile, unknown key,
+   and duplicate. A caller reading `false` as "duplicate" would have paid the duplicate reward
+   for an award that was never written. It now returns `(granted, isFirst)`.
+2. **`fireAllClients` accepted any outbound remote.** Phase 07 is its first caller in the
+   project's history. Remotes now carry an explicit `Broadcast` flag, asserted in
+   `fireAllClients` and audited, so `fireAllClients(PlayerState, snapshot)` is no longer one
+   constant away from publishing a player's entire state to the server.
+3. **The client effect pool did not bound particle count.** The comment claimed excess bursts
+   were dropped; reusing a pooled part does not stop its emitter firing, so a 120-cell chain
+   issued 120 `Emit` calls. Bursts are now budgeted per batch and spread across the blast by
+   even stride rather than truncated into one corner.
+
+Melt income now also routes through `EconomyService`, so the ledger records `IceMelt` beside
+the new `DiscoveryReward` and `ChainReaction` sources. It previously showed sinks and refunds
+but no melt income at all, which would have made every Phase 07 economy check misleading.
+
+**Not built in this phase, and deliberately:** the chain anticipation pulse and expanding wave
+described in `docs/06` are not implemented — chains currently render through the ordinary
+budgeted burst path. Reduced motion is read from the platform preference via
+`EffectSettings` and honoured by the reveal dwell, but the effects that would need it most are
+the ones not yet built. Both belong with the Phase 08 feedback pass.
 
 ## Acceptance criteria — Phase 06
 

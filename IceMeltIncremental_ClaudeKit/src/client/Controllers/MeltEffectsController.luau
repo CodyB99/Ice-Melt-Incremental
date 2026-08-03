@@ -208,19 +208,61 @@ local function buildCellIndex()
 	end)
 end
 
+--[[
+	Effect budget per batch.
+
+	The comment in IceFieldConfig claims excess bursts are dropped. They were not: `burstAt`
+	round-robins the pool and drops nothing, so a 120-cell chain issued 120 Emit calls against
+	48 parts and produced several hundred particles in a frame. docs/09 asks specifically for
+	particle count to be checked, so this is budgeted rather than left to the pool to absorb.
+
+	Chains get a larger budget than a normal melt because a chain is meant to read as bigger,
+	but both are bounded independent of how many cells were actually destroyed.
+]]
+local MAX_BURSTS_PER_BATCH = 12
+local MAX_BURSTS_PER_CHAIN = 16
+
 local function onMeltResult(result: any)
 	if type(result) ~= "table" or type(result.Cells) ~= "table" then
 		return
 	end
 
+	-- Gathered first so the budget can be spread across the whole blast rather than spent on
+	-- whichever cells happen to come first in the batch.
+	local destroyedParts: { BasePart } = {}
+	local destroyedCritical: { boolean } = {}
 	local destroyed = 0
+
 	for _, entry in result.Cells do
 		if type(entry) == "table" and entry.Destroyed then
 			destroyed += 1
-
 			local part = cellParts[entry.CellId]
 			if part then
-				burstAt(part.Position, entry.Critical == true)
+				table.insert(destroyedParts, part)
+				table.insert(destroyedCritical, entry.Critical == true)
+			end
+		end
+	end
+
+	local isChain = type(result.ChainKey) == "string"
+	local budget = if isChain then MAX_BURSTS_PER_CHAIN else MAX_BURSTS_PER_BATCH
+	local count = #destroyedParts
+
+	if count > 0 then
+		if count <= budget then
+			for index = 1, count do
+				burstAt(destroyedParts[index].Position, destroyedCritical[index])
+			end
+		else
+			--[[
+				Even stride rather than the first N. Truncating would cluster every burst in
+				one corner of a 48-stud blast and leave the rest of it unlit, which reads as a
+				bug rather than as a large explosion.
+			]]
+			for slot = 1, budget do
+				local index = math.floor((slot - 0.5) * count / budget) + 1
+				index = math.clamp(index, 1, count)
+				burstAt(destroyedParts[index].Position, destroyedCritical[index])
 			end
 		end
 	end

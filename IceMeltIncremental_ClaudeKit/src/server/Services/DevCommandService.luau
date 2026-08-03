@@ -44,6 +44,7 @@ local ProfileSchema = require(DataFolder:WaitForChild("ProfileSchema", 10))
 
 local AnalyticsService = require(script.Parent:WaitForChild("AnalyticsService", 10))
 local AnnouncementService = require(script.Parent:WaitForChild("AnnouncementService", 10))
+local ChainService = require(script.Parent:WaitForChild("ChainService", 10))
 local DataService = require(script.Parent:WaitForChild("DataService", 10))
 local DiscoveryService = require(script.Parent:WaitForChild("DiscoveryService", 10))
 local EconomyService = require(script.Parent:WaitForChild("EconomyService", 10))
@@ -351,6 +352,127 @@ end
 
 COMMANDS.economyLedger = function(): any
 	return EconomyService.getLedger()
+end
+
+COMMANDS.chainStats = function(): any
+	return ChainService.getStats()
+end
+
+--[[
+	Arms a chain seed on the cell nearest the player and fires it by melting that cell, through
+	the ordinary melt path. Reports the cap, what the chain actually destroyed, and whether any
+	armed seed survived — which is what proves chains do not cascade.
+]]
+COMMANDS.testChain = function(userId: any, chainKey: any): any
+	local player = resolvePlayer(userId)
+	if not player then
+		return "no such player in this server"
+	end
+	if type(chainKey) ~= "string" then
+		return "usage: testChain(userId, chainKey)"
+	end
+
+	local definition
+	for _, entry in ContentConfig.Chains do
+		if entry.Key == chainKey then
+			definition = entry
+		end
+	end
+	if not definition then
+		return string.format("unknown chain %q", chainKey)
+	end
+
+	local zoneKey = PlayerStateService.getCurrentZone(player)
+	local stats = StatsService.get(player, zoneKey)
+	local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+	if not stats or not root or not root:IsA("BasePart") then
+		return "player has no character or stats"
+	end
+
+	local seedId = ChainService.armNearest(zoneKey, root.Position, chainKey)
+	if not seedId then
+		return "could not arm a seed"
+	end
+	local seed = IceFieldService.getCell(seedId)
+	if not seed then
+		return "seed vanished"
+	end
+
+	local armedBefore = IceFieldService.countArmed(zoneKey, nil)
+	local before = ChainService.getStats()
+	local heatBefore = PlayerStateService.getHeat(player)
+
+	-- Fire it exactly as a melt would: destroy the seed, then hand it to the chain resolver.
+	IceFieldService.damageCell(seed, seed.Durability)
+	local outcome = ChainService.resolveFromSeeds(player, zoneKey, stats, { seed })
+
+	local after = ChainService.getStats()
+	local effectiveCap = math.min(definition.MaxCells, GameConfig.Limits.MaxCellsPerChainEvent)
+
+	return {
+		Chain = chainKey,
+		Zone = zoneKey,
+		ConfiguredMaxCells = definition.MaxCells,
+		HardLimit = GameConfig.Limits.MaxCellsPerChainEvent,
+		EffectiveCap = effectiveCap,
+		CellsDestroyed = outcome and outcome.Credited or 0,
+		WithinCap = (outcome and outcome.Credited or 0) <= effectiveCap,
+		HeatAwarded = outcome and string.format("%.2f", outcome.HeatAwarded) or "0",
+		HeatDelta = string.format("%.2f", PlayerStateService.getHeat(player) - heatBefore),
+		CellsInBatch = outcome and #outcome.Cells or 0,
+		ArmedSeedsBefore = armedBefore,
+		ArmedSeedsAfter = IceFieldService.countArmed(zoneKey, nil),
+		SeedsConsumedWithoutFiring = after.SeedsConsumedWithoutFiring
+			- before.SeedsConsumedWithoutFiring,
+	}
+end
+
+--[[
+	Fires a chain twice from the same seed. The second call must award nothing: the seed is
+	consumed before any cell is damaged, so there is no pending state left to replay.
+]]
+COMMANDS.testChainReplay = function(userId: any, chainKey: any): any
+	local player = resolvePlayer(userId)
+	if not player then
+		return "no such player in this server"
+	end
+	if type(chainKey) ~= "string" then
+		return "usage: testChainReplay(userId, chainKey)"
+	end
+
+	local zoneKey = PlayerStateService.getCurrentZone(player)
+	local stats = StatsService.get(player, zoneKey)
+	local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+	if not stats or not root or not root:IsA("BasePart") then
+		return "player has no character or stats"
+	end
+
+	local seedId = ChainService.armNearest(zoneKey, root.Position, chainKey)
+	local seed = seedId and IceFieldService.getCell(seedId)
+	if not seed then
+		return "could not arm a seed"
+	end
+
+	IceFieldService.damageCell(seed, seed.Durability)
+
+	local heatBefore = PlayerStateService.getHeat(player)
+	local first = ChainService.resolveFromSeeds(player, zoneKey, stats, { seed })
+	local heatAfterFirst = PlayerStateService.getHeat(player)
+	local second = ChainService.resolveFromSeeds(player, zoneKey, stats, { seed })
+	local third = ChainService.resolveFromSeeds(player, zoneKey, stats, { seed })
+	local heatAfterReplays = PlayerStateService.getHeat(player)
+
+	return {
+		FirstFired = first ~= nil,
+		FirstCells = first and first.Credited or 0,
+		FirstHeat = string.format("%.2f", heatAfterFirst - heatBefore),
+		SecondFired = second ~= nil,
+		ThirdFired = third ~= nil,
+		HeatFromReplays = string.format("%.2f", heatAfterReplays - heatAfterFirst),
+		ReplayAwardedNothing = second == nil and third == nil and math.abs(
+			heatAfterReplays - heatAfterFirst
+		) < 1e-9,
+	}
 end
 
 --[[

@@ -84,8 +84,13 @@ return table.freeze({
 	RespawnSweepSeconds = 0.5,
 
 	--[[
-		Client effect pool. Bursts beyond this in a single batch are dropped rather than
-		allocating, because a chain reaction must not be able to spike instance count.
+		Client effect pool. Parts are created once and reused round-robin, so instance count
+		never rises with reward size.
+
+		The pool alone is not the whole story, and the earlier comment here was wrong: reusing
+		a part does not stop the emitter being triggered, so a 120-cell chain still issued 120
+		Emit calls against these 48 parts. MeltEffectsController now budgets bursts per batch
+		and spreads them across the blast, which is what actually bounds particle count.
 	]]
 	EffectPoolSize = 48,
 

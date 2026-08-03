@@ -42,6 +42,7 @@ local Validate = require(UtilFolder:WaitForChild("Validate", 10))
 local ServerRoot = script.Parent.Parent
 local RemoteRegistry =
 	require(ServerRoot:WaitForChild("Runtime", 10):WaitForChild("RemoteRegistry", 10))
+local ChainService = require(script.Parent:WaitForChild("ChainService", 10))
 local DataService = require(script.Parent:WaitForChild("DataService", 10))
 local DiscoveryService = require(script.Parent:WaitForChild("DiscoveryService", 10))
 local EconomyService = require(script.Parent:WaitForChild("EconomyService", 10))
@@ -171,13 +172,18 @@ local function applyMelt(
 	meltStats: Types.DerivedStats,
 	position: Vector3,
 	damagePerCell: number
-): ({ Types.MeltCellResult }, number, number)
+): ({ Types.MeltCellResult }, number, number, { IceFieldService.Cell })
 	local cells = IceFieldService.queryCells(
 		zoneKey,
 		position,
 		meltStats.Radius,
 		GameConfig.Limits.MaxCellsPerPulse
 	)
+
+	-- Chain seeds destroyed by this melt, in the order they died. Almost always empty; the
+	-- `results` table beside it is allocated every pulse anyway, so one more small table
+	-- costs nothing and avoids threading an optional through the loop.
+	local destroyedSeeds: { IceFieldService.Cell } = {}
 
 	local results: { Types.MeltCellResult } = {}
 	local totalHeat = 0
@@ -187,11 +193,19 @@ local function applyMelt(
 		-- Crits multiply the reward, not the damage. Scaling damage as well would make
 		-- Crit a second Power stat and double-dip against the balance curve.
 		local critical = math.random() < meltStats.CritChance
+
+		-- Read before the damage: a destroyed cell has already had its seed cleared by the
+		-- respawn path, so asking afterwards would always come back empty.
+		local seedKey = IceFieldService.getSeedKey(cell)
 		local wasDestroyed = IceFieldService.damageCell(cell, damagePerCell)
 
 		if wasDestroyed then
 			destroyed += 1
 			totalHeat += StatMath.heatForCell(meltStats, zoneKey, critical)
+
+			if seedKey then
+				table.insert(destroyedSeeds, cell)
+			end
 		end
 
 		table.insert(results, {
@@ -219,7 +233,7 @@ local function applyMelt(
 		EconomyService.grant(player, totalHeat, "IceMelt")
 	end
 
-	return results, totalHeat, destroyed
+	return results, totalHeat, destroyed, destroyedSeeds
 end
 
 local function onMeltPulse(player: Player, payload: any)
@@ -308,7 +322,7 @@ local function onMeltPulse(player: Player, payload: any)
 		else NOMINAL_PULSE_INTERVAL
 	lastPulseAt[player] = now
 
-	local results, totalHeat, destroyed =
+	local results, totalHeat, destroyed, destroyedSeeds =
 		applyMelt(player, zoneKey, meltStats, position, meltStats.Damage * delta)
 
 	--[[
@@ -335,8 +349,43 @@ local function onMeltPulse(player: Player, payload: any)
 
 		Wrapped: a fault in the discovery path must not cost the player the melt they earned.
 	]]
-	local rolled, discovery =
-		pcall(DiscoveryService.rollForMeltEvent, player, zoneKey, meltStats, destroyed, 0)
+	--[[
+		Chain, resolved before the discovery roll so its cells count toward the same event.
+
+		Wrapped like the roll below: a fault in the chain path must not cost the player the
+		melt they already earned. `chainDestroyed` stays 0 on failure, which simply means the
+		roll sees the melt cells alone.
+	]]
+	local chainKey: string? = nil
+	local chainOriginCellId: number? = nil
+	local chainDestroyed = 0
+	local chainHeat = 0
+
+	if #destroyedSeeds > 0 then
+		local chained, outcome =
+			pcall(ChainService.resolveFromSeeds, player, zoneKey, meltStats, destroyedSeeds)
+		if not chained then
+			warn(string.format("[IceMelt] MeltService: chain failed: %s", tostring(outcome)))
+		elseif outcome then
+			chainKey = outcome.ChainKey
+			chainOriginCellId = outcome.OriginCellId
+			chainDestroyed = outcome.Credited
+			chainHeat = outcome.HeatAwarded
+			-- Appended to the same batch: a 120-cell chain is still exactly one remote.
+			for _, entry in outcome.Cells do
+				table.insert(results, entry)
+			end
+		end
+	end
+
+	local rolled, discovery = pcall(
+		DiscoveryService.rollForMeltEvent,
+		player,
+		zoneKey,
+		meltStats,
+		destroyed,
+		chainDestroyed
+	)
 	if not rolled then
 		warn(
 			string.format("[IceMelt] MeltService: discovery roll errored: %s", tostring(discovery))
@@ -347,19 +396,21 @@ local function onMeltPulse(player: Player, payload: any)
 	local discoveryHeat = if discovery then discovery.HeatAwarded else 0
 
 	stats.Accepted += 1
-	stats.CellsDestroyed += destroyed
-	stats.HeatGranted += totalHeat + discoveryHeat
+	stats.CellsDestroyed += destroyed + chainDestroyed
+	stats.HeatGranted += totalHeat + chainHeat + discoveryHeat
 
-	-- One remote for the whole pulse, carrying every cell touched.
+	-- One remote for the whole pulse, carrying every cell touched by the melt AND the chain.
 	RemoteRegistry.fireClient(RemoteNames.Name.MeltResult, player, {
 		Sequence = sequence,
 		ZoneKey = zoneKey,
 		Cells = results,
-		-- The discovery's Heat is folded in because the client shows one popup per batch, not
-		-- one per source. The grant itself already happened, inside the roll.
-		HeatGranted = totalHeat + discoveryHeat,
+		-- Every source folded into one figure because the client shows one popup per batch,
+		-- not one per source. All three grants already happened.
+		HeatGranted = totalHeat + chainHeat + discoveryHeat,
 		DiscoveryKey = if discovery then discovery.Key else nil,
 		DiscoveryIsNew = if discovery then discovery.IsNew else nil,
+		ChainKey = chainKey,
+		ChainOriginCellId = chainOriginCellId,
 	})
 end
 

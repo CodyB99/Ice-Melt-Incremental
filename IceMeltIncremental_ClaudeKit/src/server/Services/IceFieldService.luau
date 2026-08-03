@@ -51,6 +51,20 @@ export type Cell = {
 	Alive: boolean,
 	Stage: number,
 	RespawnAt: number,
+	--[[
+		Chain seed state.
+
+		A chain object is an existing pooled cell flagged as a seed, never a spawned prop. A
+		prop would reintroduce exactly the instance churn this service exists to avoid, and it
+		would not sit on the grid, so the index arithmetic below could not find it.
+
+		This server-side field is the sole authority. The part attribute and the tag written
+		alongside it are outputs for rendering and must never be read back as state.
+	]]
+	ChainKey: string?,
+	-- Wall clock before which this cell may not arm again, so a player cannot park on one
+	-- spot and farm the same seed as it respawns.
+	ChainArmableAt: number,
 }
 
 type ZoneField = {
@@ -150,6 +164,8 @@ local function buildZoneField(zoneKey: string, container: Instance): ZoneField?
 				Alive = true,
 				Stage = 0,
 				RespawnAt = 0,
+				ChainKey = nil,
+				ChainArmableAt = 0,
 			}
 
 			applyAppearance(cell)
@@ -263,6 +279,134 @@ function IceFieldService.damageCell(cell: Cell, damage: number): boolean
 	return false
 end
 
+-- === Chain seeds ===========================================================
+
+--[[
+	Flags a cell as a chain seed.
+
+	The tag and attribute are written for the client to render an anticipation glow; neither
+	is ever read back. A client that removes the tag locally changes what it sees and nothing
+	else, because the server decides from `cell.ChainKey`.
+]]
+function IceFieldService.setChainSeed(cell: Cell, chainKey: string)
+	cell.ChainKey = chainKey
+	cell.Part:SetAttribute("ChainKey", chainKey)
+	if not CollectionService:HasTag(cell.Part, TagNames.ChainSource) then
+		CollectionService:AddTag(cell.Part, TagNames.ChainSource)
+	end
+end
+
+--[[
+	Clears a seed and puts the cell on cooldown. `cooldownSeconds` of 0 clears without one,
+	which is what a respawn does.
+]]
+function IceFieldService.clearChainSeed(cell: Cell, cooldownSeconds: number)
+	cell.ChainKey = nil
+	cell.ChainArmableAt = os.clock() + math.max(0, cooldownSeconds)
+	cell.Part:SetAttribute("ChainKey", nil)
+	if CollectionService:HasTag(cell.Part, TagNames.ChainSource) then
+		CollectionService:RemoveTag(cell.Part, TagNames.ChainSource)
+	end
+end
+
+function IceFieldService.getSeedKey(cell: Cell): string?
+	return cell.ChainKey
+end
+
+function IceFieldService.getZoneCells(zoneKey: string): { Cell }
+	local field = fields[zoneKey]
+	return if field then field.Cells else {}
+end
+
+--[[
+	Cells within `radius`, nearest first, capped.
+
+	A separate primitive from `queryCells` rather than a flag on it, because the two want
+	opposite things. `queryCells` walks the grid row by row and returns the moment it hits the
+	cap, which is right for a melt radius where the cap almost never binds. For a chain the cap
+	ALWAYS binds — a Lava Capsule keeps 40 of roughly 60 candidates — and row-major truncation
+	would return the northernmost band rather than the circular blast docs/04 describes.
+
+	The ascending-Id tie-break is not cosmetic. A regular grid produces many exactly-equal
+	distances and `table.sort` is not stable, so without it the same seed truncates differently
+	between runs and the cap test stops being reproducible.
+
+	`queryCells` is deliberately left untouched: switching the melt query to nearest-first
+	would change which cells die and therefore the melt pacing, on a project with open balance
+	findings.
+]]
+function IceFieldService.queryCellsNearest(
+	zoneKey: string,
+	position: Vector3,
+	radius: number,
+	maxCells: number
+): { Cell }
+	local field = fields[zoneKey]
+	local result: { Cell } = {}
+	if not field then
+		return result
+	end
+
+	local grid = IceFieldConfig.GridSize
+	local spacing = IceFieldConfig.Spacing
+	local half = (grid - 1) / 2
+	local origin = field.Origin
+
+	local colCentre = (position.X - origin.X) / spacing + half
+	local rowCentre = (position.Z - origin.Z) / spacing + half
+	local reach = radius / spacing
+
+	local colMin = math.max(0, math.floor(colCentre - reach))
+	local colMax = math.min(grid - 1, math.ceil(colCentre + reach))
+	local rowMin = math.max(0, math.floor(rowCentre - reach))
+	local rowMax = math.min(grid - 1, math.ceil(rowCentre + reach))
+
+	local radiusSquared = radius * radius
+
+	-- Gathered with their distances so the sort does not recompute them.
+	local candidates: { { Cell: Cell, DistanceSquared: number } } = {}
+
+	for row = rowMin, rowMax do
+		for col = colMin, colMax do
+			local index = row * grid + col + 1
+			local cell = field.Cells[index]
+			if cell and cell.Alive then
+				local delta = cell.Position - position
+				local flat = delta.X * delta.X + delta.Z * delta.Z
+				if flat <= radiusSquared then
+					table.insert(candidates, { Cell = cell, DistanceSquared = flat })
+				end
+			end
+		end
+	end
+
+	table.sort(candidates, function(a, b): boolean
+		if a.DistanceSquared == b.DistanceSquared then
+			return a.Cell.Id < b.Cell.Id
+		end
+		return a.DistanceSquared < b.DistanceSquared
+	end)
+
+	for index = 1, math.min(#candidates, maxCells) do
+		table.insert(result, candidates[index].Cell)
+	end
+	return result
+end
+
+function IceFieldService.countArmed(zoneKey: string?, chainKey: string?): number
+	local total = 0
+	for _, cell in cellsById do
+		if cell.ChainKey ~= nil then
+			local zoneOk = zoneKey == nil or cell.ZoneKey == zoneKey
+			local keyOk = chainKey == nil or cell.ChainKey == chainKey
+			if zoneOk and keyOk then
+				total += 1
+			end
+		end
+	end
+	return total
+end
+
 function IceFieldService.countAlive(zoneKey: string?): number
 	local total = 0
 	for _, cell in cellsById do
@@ -284,6 +428,23 @@ local function respawnCell(cell: Cell)
 	cell.Durability = cell.MaxDurability
 	cell.Stage = 0
 	cell.RespawnAt = 0
+
+	--[[
+		A respawned cell is never still a seed.
+
+		Cleared unconditionally rather than only when one is set: a seed that survived its own
+		destruction would let the same cell fire a chain every respawn cycle, which is the
+		cheapest chain exploit there is and needs no modified client at all. The cooldown is
+		applied by whoever consumed the seed, not here.
+	]]
+	if cell.ChainKey ~= nil then
+		cell.ChainKey = nil
+		cell.Part:SetAttribute("ChainKey", nil)
+		if CollectionService:HasTag(cell.Part, TagNames.ChainSource) then
+			CollectionService:RemoveTag(cell.Part, TagNames.ChainSource)
+		end
+	end
+
 	applyAppearance(cell)
 end
 
