@@ -180,6 +180,24 @@ end
 -- Each one validates, clamps, marks the profile dirty, and queues replication.
 
 --[[
+	Marks the profile dirty, drops any cached stat block, and queues a replication.
+
+	Stat invalidation belongs here rather than in the callers. It used to live only in
+	UpgradeService.purchase, so every other route into these mutations — dev commands, a
+	Thaw, and anything a later phase adds — left StatsService serving the stat block from
+	before the change. The player kept their old damage and radius until something unrelated
+	happened to invalidate the cache.
+
+	Calling it on every mutation is cheap: the next read recomputes, and these mutations are
+	rare compared to the melt pulses that read the cache.
+]]
+local function commit(player: Player)
+	DataService.markDirty(player)
+	StatsService.invalidate(player)
+	PlayerStateService.queuePush(player)
+end
+
+--[[
 	Adds (or removes, with a negative amount) Heat. Returns the new balance.
 	Heat is clamped into [0, MaxHeat]: a negative balance or a NaN would poison every
 	downstream cost check.
@@ -218,8 +236,8 @@ function PlayerStateService.addEmbers(player: Player, amount: number): number
 	end
 
 	profile.Embers = Validate.clampFinite(profile.Embers + amount, 0, GameConfig.Limits.MaxEmbers)
-	DataService.markDirty(player)
-	PlayerStateService.queuePush(player)
+	-- Embers feed the permanent Heat multiplier, so the cached stat block is now stale.
+	commit(player)
 	return profile.Embers
 end
 
@@ -243,8 +261,7 @@ function PlayerStateService.setUpgradeLevel(player: Player, key: string, level: 
 	end
 
 	(profile.Upgrades :: any)[key] = level
-	DataService.markDirty(player)
-	PlayerStateService.queuePush(player)
+	commit(player)
 	return true
 end
 
@@ -264,8 +281,7 @@ function PlayerStateService.setHighestTool(player: Player, index: number): boole
 	end
 
 	profile.HighestTool = index
-	DataService.markDirty(player)
-	PlayerStateService.queuePush(player)
+	commit(player)
 	return true
 end
 
@@ -286,8 +302,7 @@ function PlayerStateService.setEquippedTool(player: Player, index: number): bool
 	end
 
 	profile.EquippedTool = index
-	DataService.markDirty(player)
-	PlayerStateService.queuePush(player)
+	commit(player)
 	return true
 end
 
@@ -383,16 +398,26 @@ function PlayerStateService.applyThawReset(player: Player, emberAward: number): 
 	zones[ContentConfig.StartingZone] = true
 	profile.UnlockedZones = zones
 
-	DataService.markDirty(player)
-	PlayerStateService.queuePush(player)
+	commit(player)
 	return true
 end
 
 -- === Handshake =============================================================
 
 local function onClientReady(player: Player)
+	--[[
+		The bucket is created on PlayerAdded, which is wired in Start, but this handler is
+		wired in Init. A handshake that arrives in that window found no bucket and was
+		dropped, silently spending one of the client's four retries. Create it on demand
+		instead, so the window cannot cost a player their state.
+	]]
 	local bucket = readyBuckets[player]
-	if not bucket or not Validate.consumeToken(bucket, os.clock()) then
+	if not bucket then
+		bucket = Validate.newTokenBucket(3, 0.5, os.clock())
+		readyBuckets[player] = bucket
+	end
+
+	if not Validate.consumeToken(bucket, os.clock()) then
 		return
 	end
 

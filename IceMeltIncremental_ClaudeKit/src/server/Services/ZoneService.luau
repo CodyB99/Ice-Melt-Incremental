@@ -163,9 +163,25 @@ function ZoneService.unlock(player: Player, zoneKey: string): (boolean, string?)
 		return false, "Failed"
 	end
 
-	-- Travel there immediately: the player just paid to go, so making them press a second
-	-- button would be pointless friction.
-	placeCharacter(player, zoneKey)
+	--[[
+		Travel there immediately: the player just paid to go, so making them press a second
+		button would be pointless friction.
+
+		A failure here is not a failed purchase. The zone is unlocked and saved either way,
+		and the player can travel from the Zones panel; the only cause is having no live
+		character to move. Warn rather than fail the unlock, which would imply the Heat was
+		not spent.
+	]]
+	if not placeCharacter(player, zoneKey) then
+		warn(
+			string.format(
+				"[IceMelt] ZoneService: unlocked %s for %s but could not move them (no character). "
+					.. "The zone is unlocked; they can travel manually.",
+				zoneKey,
+				player.Name
+			)
+		)
+	end
 	return true, nil
 end
 

@@ -32,6 +32,7 @@ local CollectionService = game:GetService("CollectionService")
 local IceFieldConfig = require(ConfigFolder:WaitForChild("IceFieldConfig", 15))
 local RemoteNames = require(ConfigFolder:WaitForChild("RemoteNames", 15))
 local TagNames = require(ConfigFolder:WaitForChild("TagNames", 15))
+local NumberFormatter = require(Shared:WaitForChild("Util", 15):WaitForChild("NumberFormatter", 15))
 
 local RemoteAccess =
 	require(script.Parent.Parent:WaitForChild("Runtime", 15):WaitForChild("RemoteAccess", 15))
@@ -163,7 +164,11 @@ local function showHeatPopup(amount: number)
 	label.TextScaled = true
 	label.TextColor3 = Color3.fromRGB(255, 196, 120)
 	label.TextStrokeTransparency = 0.4
-	label.Text = string.format("+%d", math.floor(amount))
+	-- Formatted, not floored. math.floor turned every fractional reward into a smaller whole
+	-- number, so after a Thaw a cell worth 1.31 Heat read as "+1" and anything under 1 read
+	-- as "+0" while Heat visibly went up. The shared formatter also keeps large late-game
+	-- rewards readable instead of printing fifteen digits over the character's head.
+	label.Text = string.format("+%s", NumberFormatter.abbreviate(amount))
 	label.Parent = gui
 
 	task.delay(0.7, function()

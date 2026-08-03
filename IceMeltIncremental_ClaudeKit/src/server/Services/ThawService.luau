@@ -46,6 +46,8 @@ local AnalyticsService = require(script.Parent:WaitForChild("AnalyticsService", 
 local DataService = require(script.Parent:WaitForChild("DataService", 10))
 local PlayerStateService = require(script.Parent:WaitForChild("PlayerStateService", 10))
 local StatsService = require(script.Parent:WaitForChild("StatsService", 10))
+local ToolService = require(script.Parent:WaitForChild("ToolService", 10))
+local UpgradeService = require(script.Parent:WaitForChild("UpgradeService", 10))
 local ZoneService = require(script.Parent:WaitForChild("ZoneService", 10))
 
 type ThawPreview = Types.ThawPreview
@@ -177,10 +179,33 @@ function ThawService.confirm(player: Player, token: any): (number?, string?)
 
 	StatsService.invalidate(player)
 
+	--[[
+		Push the reset stats onto the live character.
+
+		A Thaw is the one path that lowers stats, and nothing else re-applies them: walk
+		speed is only written on purchase and on spawn, and the held tool model is only
+		rebuilt on unlock, equip, and spawn. Without these two calls the player keeps the
+		walk speed and the tool silhouette of the run they just spent.
+
+		Walk speed was the worse of the two. The profile said Speed level 0 while the
+		Humanoid still ran at the level-20 value of 31, so the stat was free until the next
+		respawn — and re-buying the first level would have *slowed the player down* to 16.75,
+		which reads as a broken upgrade rather than a reset.
+	]]
+	UpgradeService.applyWalkSpeed(player)
+	ToolService.refreshHeldModel(player)
+
 	-- The reset revoked every zone beyond the Backyard, so a player standing in the Cavern
 	-- is now trespassing in their own save. Move them before the ZoneService patrol does it
 	-- for them and reports it as an enforcement.
-	ZoneService.travel(player, ContentConfig.StartingZone)
+	local travelled = ZoneService.travel(player, ContentConfig.StartingZone)
+	if not travelled then
+		-- Travel only fails when there is no live character to move, in which case the
+		-- player will spawn at the hub anyway. Correct the tracked zone regardless, so the
+		-- replicated snapshot cannot keep naming a zone the reset just locked.
+		PlayerStateService.setCurrentZone(player, ContentConfig.StartingZone)
+		PlayerStateService.queuePush(player)
+	end
 
 	-- Persist immediately. A Thaw is the single most painful thing to lose to a crash,
 	-- because the run is already gone.

@@ -449,18 +449,82 @@ running a second play session while a multi-client test is open.
 | Reset and retained fields exactly match documentation | **Met** |
 | Player resumes a noticeably faster second run | **Met** — Heat per cell 1.0 → 1.3063515, exactly the Ember multiplier |
 
+## Bug-fix pass, 2026-08-02 (between Phase 06 and Phase 07)
+
+A six-lens audit of the whole codebase for defects that change gameplay or progression, with
+every candidate independently checked by two verifiers. 35 candidates, 14 verified, 13
+confirmed, 1 refuted. The 21 below the severity cutoff were **not** verified and are listed at
+the end as open.
+
+### Fixed and verified in a live Studio session
+
+| Bug | Impact | Fix | Evidence |
+|---|---|---|---|
+| **Auto-Melt did nothing.** `AutoRate` was computed, clamped, replicated and drawn as a buy card reading "0.1/s → 0.2/s", but no code anywhere read it | The seventh upgrade track charged real Heat for zero effect. Taking it to its cap costs ~4.0e8 Heat | Per-player sweep in `MeltService` runs `AutoRate` pulses/sec through the same `applyMelt` path as a player pulse | **41 auto pulses observed against 41 expected** (AutoRate 2.0/s × 20.6s), exactly the `docs/03` curve. Heat/sec 0.212 → 0.356 at the same spot |
+| **A Thaw never re-applied stats to the live character** | Walk speed stayed at the pre-Thaw value for the whole next run, so the stat was free until a respawn — and re-buying Speed level 1 (16.75) made the player *slower* than the 31 they had kept. The held tool model also stayed on the old tool | `ThawService.confirm` calls `applyWalkSpeed` and `refreshHeldModel` | On a character that was **never respawned**: WalkSpeed 31 → **16**; held model Blowtorch (`PointLight.Range` 10) → Match (7) |
+| **Autosave could re-claim a released session lock** | Autosave yields inside `UpdateAsync`. If the player left during that yield, the release cleared the Lock and the autosave's write put it back with a fresh heartbeat — locking the player out of their own profile for up to 150s, on a server that no longer had them | Writes serialised per player with a bounded wait, plus a re-check that declines a non-release write once a release is pending | `rejoin` round trip preserved Heat 424,242 through save → release → load against the real DataStore. A concurrent-save probe showed the second write **waiting 0.47s** for the first instead of racing it |
+| **HUD panels were unreachable on phones** | Fixed 340px panels anchored 84px up need 424px of height; a phone in landscape has ~354px. The top of every panel — the first upgrade card, the Thaw summary — rendered above the screen edge, and a `ScrollingFrame` cannot scroll above its own origin | Relative height with a `UISizeConstraint` maximum | Computed top edge at 354px viewport: **−70 (clipped) → +12 (ok)**; at 390px: −34 → +12. Identical at ≥504px, so desktop is unchanged. Button row 4×88+3×8 = 376 now fits its 376px frame (was 424 in 380) |
+| **Idle time was banked as free damage** | The empty-cell early return skipped the `lastPulseAt` update, so time with nothing in range was later credited as contact time — stepping off the ice and back on dealt up to three nominal pulses in one frame | Delta computed before the cell query and committed unconditionally | Covered by the `applyMelt` refactor; the early return no longer exists |
+| **Stat cache was only invalidated by `UpgradeService`** | Every other route into a stat-changing mutation left `StatsService` serving the block from before the change | A `commit` helper in `PlayerStateService` marks dirty, invalidates and pushes. Deliberately not used by `addHeat`, which is a 12/sec hot path that cannot affect stats | Set Power to 30 and Radius to 12 through a path that never touches `UpgradeService`: replicated Damage **858.50** (expected 858.50) and Radius **9.90** (expected 9.90), both updated immediately |
+| `ClientReady` could be dropped during startup | The handler is wired in `Init` but its rate-limit bucket was created in `Start`, so a handshake landing in that window was silently discarded, spending one of the client's four retries | Bucket created on demand in the handler | Startup unchanged: one line per side, 12 services |
+| Heat popup floored every reward | After a Thaw a cell worth 1.31 Heat read "+1", and anything under 1 read "+0" while Heat visibly rose | Uses the shared `NumberFormatter` | — |
+| Zone unlock could charge and silently not move the player | The unlock succeeded but the travel was discarded without a word | Warns; the zone is unlocked and saved either way, so the player can travel from the Zones panel | — |
+
+Static checks after every change: `stylua` clean, `selene` 0/0/0, `luau-lsp analyze` exit 0,
+`rojo build` exit 0. Play session produced no red errors.
+
+### Correction: the recorded economy diagnosis was wrong in magnitude
+
+The Phase 06 note that the first Thaw takes "about 20 days" extrapolated the measured
+0.58 Heat/sec as a **constant**, which ignores that the player buys upgrades. Simulated
+against the real `StatMath`, `BalanceConfig`, `ContentConfig` and `IceFieldConfig` — with the
+model calibrated to reproduce the measured 0.58 Heat/sec at base stats exactly — a player who
+spends reaches:
+
+| Milestone | Target | Simulated |
+|---|---|---|
+| First upgrade | 15–30s | **25s** — met |
+| Candle | 2–4 min | ~16 min |
+| Ice Cavern | 8–12 min | ~75 min |
+| First Thaw | 20–30 min | **~1.8 hours**, not ~20 days |
+
+A second claim made during this pass — that zones are economically dominated by four orders
+of magnitude — was **also wrong and is withdrawn**. It compared a zone against Power levels
+bought from level 0. Measured at the level a player is actually at when they can afford the
+zone (Power ~lv22 for the Cavern), the Cavern gives ×1.20 income against ×1.35 for the same
+Heat on Power, and the City ×1.25 against ×1.35. Zones are priced consistently with
+everything else. **No zone rebalance was made.**
+
+The original root cause stands, unchanged and still an owner decision: no upgrade track has
+effect growth at or above cost growth, so payback lengthens with every level. `docs/03` says
+to tune from real playtests rather than formulas, and its numbers are declared "initial tuning
+values", so the curves are the right knob — but the choice of knob is the owner's.
+
+### Confirmed but not fixed in this pass
+
+- 21 lower-severity candidates were never verified and remain open, including: a save still in
+  flight from an abandoned Player overwriting a same-server rejoin; the Thaw panel not
+  refreshing while open; `queryCells` truncating toward the −X/−Z corner rather than by
+  distance at large radii; `loadStatus` leaking an entry when a load fails; refunds inflating
+  `RunHeat` and `LifetimeHeat` through `EconomyService.grant`; the debug overlay covering HUD
+  buttons below ~748px; `NumberFormatter` trimming significant digits at `decimals = 0`.
+
 ## Next action
 
-**The economy question is now the only thing worth doing next.** Every mechanic through Phase
-06 is built, secure, and verified; three separate pacing targets miss by two to four orders of
-magnitude for one shared reason. Phase 07 (discoveries and their rarity weighting) would be
-the fourth system tuned against a curve that does not compound.
+**The economy question is still the one open design decision**, but it is smaller than the
+Phase 06 note claimed. Corrected figures are in the bug-fix pass above: the first Thaw is
+about 1.8 hours against a 20–30 minute target, not 20 days, and the zone prices are consistent
+with the rest of the economy rather than broken. Candle (~16 min vs 2–4) and the Cavern
+(~75 min vs 8–12) are the two real misses.
 
 1. **Decide the economy question.** Options are recorded under the Phase 04 and 05 findings.
-   The clearest single change is making effect growth exceed cost growth on at least one
-   track, so a compounding route exists at all.
+   The clearest single change is making effect growth meet or exceed cost growth on at least
+   one track, so a compounding route exists at all. `docs/03` declares its numbers "initial
+   tuning values", so the Growth column is a legitimate knob.
 2. **Play for five minutes and record real timings.** Every pacing number so far comes from a
-   scripted player, which is a poor proxy for how efficiently a human sweeps ice.
+   scripted player or a simulation, both poor proxies for how efficiently a human sweeps ice.
+   The simulation is calibrated to reproduce the measured base rate exactly, but its
+   purchase-order model is its weakest part and should not be trusted to settle tuning.
 3. **Run a two-player session in the Frozen City** to close the outstanding Phase 05
    performance criterion.
 

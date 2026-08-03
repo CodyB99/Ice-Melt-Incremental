@@ -63,6 +63,24 @@ local releasing: { [Player]: boolean } = {}
 local shuttingDown = false
 
 --[[
+	Whether a write is currently in flight for a player.
+
+	Writes must be serialised per player. `saveProfile` yields inside UpdateAsync, so an
+	autosave and a release can otherwise be in flight on the same key at once, and the two
+	land in whichever order the DataStore happens to finish them. If the autosave lands
+	second it rewrites the Lock the release just cleared, complete with a fresh heartbeat —
+	so the player who just left is locked out of their own profile for the full
+	LockTimeoutSeconds when they rejoin, on a server that no longer has them.
+]]
+local saving: { [Player]: boolean } = {}
+
+-- How long a caller will wait for an in-flight write before giving up. Comfortably longer
+-- than a healthy UpdateAsync round trip including its retries, and short enough that a hung
+-- DataStore cannot hold a BindToClose release open past its own grace period.
+local SAVE_WAIT_TIMEOUT_SECONDS = 10
+local SAVE_WAIT_POLL_SECONDS = 0.05
+
+--[[
 	Identity used for the session lock.
 
 	Studio leaves game.JobId empty. Deriving one from os.time() made every play session
@@ -211,16 +229,47 @@ end
 	makes a fast rejoin work instead of waiting out the lock timeout.
 ]]
 local function saveProfile(player: Player, release: boolean): boolean
+	--[[
+		Wait for any write already in flight for this player, so writes to one key are
+		strictly ordered. Everything below re-reads state after this wait, because the write
+		we waited on may have been a release that cleared the profile.
+	]]
+	local waited = 0
+	while saving[player] and waited < SAVE_WAIT_TIMEOUT_SECONDS do
+		task.wait(SAVE_WAIT_POLL_SECONDS)
+		waited += SAVE_WAIT_POLL_SECONDS
+	end
+	if saving[player] then
+		warn(
+			string.format(
+				"[IceMelt] DataService: a write for %s was still in flight after %ds; "
+					.. "skipping this one rather than racing it",
+				player.Name,
+				SAVE_WAIT_TIMEOUT_SECONDS
+			)
+		)
+		return false
+	end
+
 	local activeBackend = backend
 	local profile = profiles[player]
 	if not activeBackend or not profile then
 		return false
 	end
 
+	--[[
+		A release has been requested while we were waiting. Writing now would re-claim the
+		lock that release is about to clear, which is the exact lockout this serialisation
+		exists to prevent.
+	]]
+	if releasing[player] and not release then
+		return false
+	end
+
 	local key = keyFor(player.UserId)
 	local lostLock = false
 
-	local result = activeBackend.update(key, function(stored)
+	local function transform(stored: any): any
 		local container = if type(stored) == "table" then stored else {}
 		local lock = container.Lock
 
@@ -244,7 +293,33 @@ local function saveProfile(player: Player, release: boolean): boolean
 			else { JobId = jobId, PlaceId = game.PlaceId, Heartbeat = os.time() }
 
 		return container
-	end, DataConfig.SaveAttempts, DataConfig.SaveBackoffBaseSeconds)
+	end
+
+	--[[
+		The in-flight flag must be cleared on every exit, including a throw. Leaking it would
+		make every later write for this player wait out SAVE_WAIT_TIMEOUT_SECONDS and then
+		decline, which would silently stop saving that player for the rest of the session.
+	]]
+	saving[player] = true
+	local ok, result = pcall(
+		activeBackend.update,
+		key,
+		transform,
+		DataConfig.SaveAttempts,
+		DataConfig.SaveBackoffBaseSeconds
+	)
+	saving[player] = nil
+
+	if not ok then
+		warn(
+			string.format(
+				"[IceMelt] DataService: save for %s threw: %s",
+				player.Name,
+				tostring(result)
+			)
+		)
+		return false
+	end
 
 	if lostLock then
 		warn(
@@ -504,8 +579,21 @@ function DataService.Start()
 				break
 			end
 
+			--[[
+				Snapshot the players first, the same way BindToClose does. saveProfile
+				yields, and joins and leaves mutate `profiles` during that yield, so
+				iterating the live table across the yield means iterating a table that is
+				being rewritten underneath us.
+			]]
+			local due: { Player } = {}
 			for player, _ in profiles do
-				if player.Parent and (dirty[player] or true) then
+				table.insert(due, player)
+			end
+
+			for _, player in due do
+				-- Re-checked after every yield: the player may have left, and their profile
+				-- may already have been released, while an earlier save was in flight.
+				if player.Parent and profiles[player] and not releasing[player] then
 					-- Saves even when clean, because the write also refreshes the session
 					-- lock heartbeat; skipping it would let our own lock go stale.
 					saveProfile(player, false)

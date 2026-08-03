@@ -126,18 +126,40 @@ end
 
 -- === Panels ================================================================
 
+--[[
+	Panels sit above the button row, anchored to the bottom-right.
+
+	The height is relative with a maximum rather than a literal 340px. A fixed 340 panel
+	whose bottom edge is already 84px up needs 424px of vertical space, and a phone in
+	landscape has about 354px once the top inset is removed — so the top of every panel,
+	including the first upgrade card and the Thaw summary, rendered above the screen edge
+	with no way to reach it. A ScrollingFrame cannot scroll above its own canvas origin, so
+	the content was not merely off-screen, it was unreachable.
+
+	`1, -96` leaves room for the button row plus its margins, and the MaxSize keeps the
+	panel from stretching absurdly tall on a desktop monitor.
+]]
+local PANEL_WIDTH = 320
+local PANEL_MAX_HEIGHT = 340
+
 local function makePanel(parent: Instance, name: string): Frame
 	local frame = Instance.new("Frame")
 	frame.Name = name
 	frame.AnchorPoint = Vector2.new(1, 1)
 	frame.Position = UDim2.new(1, -12, 1, -84)
-	frame.Size = UDim2.new(0, 320, 0, 340)
+	frame.Size = UDim2.new(0, PANEL_WIDTH, 1, -96)
 	frame.BackgroundColor3 = COLOR_PANEL
 	frame.BackgroundTransparency = 0.05
 	frame.Visible = false
 	frame.Parent = parent
 	corner(frame, 10)
 	padding(frame, 10)
+
+	local sizeLimit = Instance.new("UISizeConstraint")
+	sizeLimit.MaxSize = Vector2.new(PANEL_WIDTH, PANEL_MAX_HEIGHT)
+	sizeLimit.MinSize = Vector2.new(PANEL_WIDTH, 0)
+	sizeLimit.Parent = frame
+
 	panels[name] = frame
 	return frame
 end
@@ -340,7 +362,9 @@ local function buildThawPanel(parent: Instance)
 
 	thawDetail = label(frame, "", 11, COLOR_MUTED);
 	(thawDetail :: TextLabel).Position = UDim2.new(0, 0, 0, 76);
-	(thawDetail :: TextLabel).Size = UDim2.new(1, 0, 0, 168);
+	-- Fills whatever is left between the summary and the confirm button, so a panel that
+	-- shrank to fit a phone does not push this text underneath the button.
+	(thawDetail :: TextLabel).Size = UDim2.new(1, 0, 1, -130);
 	(thawDetail :: TextLabel).TextWrapped = true;
 	(thawDetail :: TextLabel).TextYAlignment = Enum.TextYAlignment.Top;
 	(thawDetail :: TextLabel).Text = "Resets: Heat, all seven upgrades, every tool back to "
@@ -573,7 +597,9 @@ function HudController.Start()
 	local buttonRow = Instance.new("Frame")
 	buttonRow.AnchorPoint = Vector2.new(1, 1)
 	buttonRow.Position = UDim2.new(1, -12, 1, -12)
-	buttonRow.Size = UDim2.new(0, 380, 0, 60)
+	-- Four 88px buttons with 8px gaps is 376. The row was 380 wide holding 424 of buttons,
+	-- so the leftmost one hung outside its own frame and off the edge of a portrait phone.
+	buttonRow.Size = UDim2.new(0, 376, 0, 60)
 	buttonRow.BackgroundTransparency = 1
 	buttonRow.Parent = screenGui
 
@@ -592,7 +618,7 @@ function HudController.Start()
 		}
 	do
 		local button = Instance.new("TextButton")
-		button.Size = UDim2.new(0, 100, 1, 0)
+		button.Size = UDim2.new(0, 88, 1, 0)
 		button.BackgroundColor3 = COLOR_PANEL
 		button.Font = Enum.Font.GothamBold
 		button.TextSize = 15
