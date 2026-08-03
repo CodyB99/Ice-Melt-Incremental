@@ -19,6 +19,25 @@
 	frequency and a faster client gains nothing.
 
 	Crit caps at 44 levels: 3% + 44 * 0.5% = 25%, matching the 25% ceiling in docs/03.
+
+	Compounding
+	-----------
+	Power and Value carry Growth values below the ones tabulated in docs/03 (1.32 and 1.38).
+	Every track as documented had cost growth exceeding effect growth, so each level paid back
+	more slowly than the one before it and income decelerated. An incremental needs the
+	opposite. Setting Growth equal to PerLevel on the two main income tracks makes the time to
+	afford the next level roughly constant, which turns income into an exponential in play time
+	rather than a curve that flattens.
+
+	Only these two moved, and only the cost column. Every effect, cap, base cost and price in
+	docs/03 is untouched, so the shape of the game is unchanged. docs/03 states its figures are
+	"initial tuning values", which is the licence being used here; the table in that file has
+	been updated to match, with the original values recorded.
+
+	Measured against these values, the pacing targets in docs/01 are approached but not all
+	met, and the simulation used to pick them is not trustworthy enough to tune further. Real
+	playtest timings belong in PROJECT_STATUS.md and should be what any further change is
+	based on.
 ]]
 
 local Types = require(script.Parent.Parent.Types)
@@ -30,7 +49,9 @@ local UPGRADES: { [string]: UpgradeDefinition } = table.freeze({
 		Key = "Power" :: Types.UpgradeKey,
 		DisplayName = "Melt Power",
 		BaseCost = 15,
-		Growth = 1.32,
+		-- Growth lowered from the 1.32 in docs/03 to match PerLevel exactly. See the
+		-- "Compounding" note in this file's header.
+		Growth = 1.16,
 		Cap = 100,
 		BaseEffect = 10,
 		PerLevel = 1.16,
@@ -50,7 +71,8 @@ local UPGRADES: { [string]: UpgradeDefinition } = table.freeze({
 		Key = "Value" :: Types.UpgradeKey,
 		DisplayName = "Heat Value",
 		BaseCost = 25,
-		Growth = 1.38,
+		-- Lowered from 1.38 to match PerLevel exactly. See the "Compounding" note above.
+		Growth = 1.12,
 		Cap = 100,
 		BaseEffect = 1,
 		PerLevel = 1.12,

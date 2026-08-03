@@ -39,11 +39,15 @@ local WorldConfig = require(ConfigFolder:WaitForChild("WorldConfig", 10))
 local DataFolder = script.Parent.Parent:WaitForChild("Data", 10)
 local ProfileSchema = require(DataFolder:WaitForChild("ProfileSchema", 10))
 
+local AnalyticsService = require(script.Parent:WaitForChild("AnalyticsService", 10))
 local DataService = require(script.Parent:WaitForChild("DataService", 10))
 local IceFieldService = require(script.Parent:WaitForChild("IceFieldService", 10))
 local MeltService = require(script.Parent:WaitForChild("MeltService", 10))
 local PlayerStateService = require(script.Parent:WaitForChild("PlayerStateService", 10))
+local StatsService = require(script.Parent:WaitForChild("StatsService", 10))
 local ThawService = require(script.Parent:WaitForChild("ThawService", 10))
+local ToolService = require(script.Parent:WaitForChild("ToolService", 10))
+local UpgradeService = require(script.Parent:WaitForChild("UpgradeService", 10))
 
 local DevCommandService = {
 	Name = "DevCommandService",
@@ -132,6 +136,115 @@ end
 
 COMMANDS.thawStats = function(): any
 	return ThawService.getStats()
+end
+
+--[[
+	Playtest milestone timings, against the targets in docs/01.
+
+	This is the measurement docs/03 asks for and the reason the stopwatch exists: real
+	timestamps from a human run, rather than a figure derived from a formula.
+]]
+COMMANDS.milestones = function(userId: any): any
+	local player = resolvePlayer(userId)
+	if not player then
+		return "no such player in this server"
+	end
+
+	local marks = AnalyticsService.getMilestones(player)
+	local elapsed = AnalyticsService.getRunSeconds(player)
+
+	local TARGETS: { { Key: string, Label: string, Lo: number, Hi: number } } = {
+		{ Key = "FirstUpgrade", Label = "First upgrade", Lo = 15, Hi = 30 },
+		{ Key = "Tool2_Candle", Label = "Candle", Lo = 120, Hi = 240 },
+		{ Key = "Zone_Cavern", Label = "Ice Cavern", Lo = 480, Hi = 720 },
+		{ Key = "Thaw1", Label = "First Thaw", Lo = 1200, Hi = 1800 },
+	}
+
+	local lines: { string } = {}
+	for _, t in TARGETS do
+		local at = marks[t.Key]
+		if at then
+			local verdict = if at < t.Lo then "FAST" elseif at > t.Hi then "SLOW" else "IN WINDOW"
+			table.insert(
+				lines,
+				string.format(
+					"%-14s %7.1fs (%5.2f min)  target %.0f-%.0fs  %s",
+					t.Label,
+					at,
+					at / 60,
+					t.Lo,
+					t.Hi,
+					verdict
+				)
+			)
+		else
+			table.insert(
+				lines,
+				string.format("%-14s     not reached  target %.0f-%.0fs", t.Label, t.Lo, t.Hi)
+			)
+		end
+	end
+
+	-- Anything else the run recorded, such as later tools and the Frozen City.
+	local extra: { string } = {}
+	for name, at in marks do
+		local documented = false
+		for _, t in TARGETS do
+			if t.Key == name then
+				documented = true
+				break
+			end
+		end
+		if not documented then
+			table.insert(extra, string.format("%s at %.1fs (%.2f min)", name, at, at / 60))
+		end
+	end
+	table.sort(extra)
+
+	return {
+		RunSeconds = string.format("%.1f", elapsed),
+		RunMinutes = string.format("%.2f", elapsed / 60),
+		Targets = lines,
+		Other = extra,
+	}
+end
+
+--[[
+	Wipes the profile to a true new-player state and restarts the milestone stopwatch, so a
+	pacing run starts from the same place a first-time player does.
+]]
+COMMANDS.startCleanRun = function(userId: any): any
+	local player = resolvePlayer(userId)
+	if not player then
+		return "no such player in this server"
+	end
+
+	local reset = COMMANDS.reset(userId)
+
+	--[[
+		Zero the Heat the save yield let them earn, then start the stopwatch. The reset
+		itself is now clean, but the save still yields for a moment and a player standing on
+		ice keeps melting at the reset stats during it. A pacing run has to begin at exactly
+		zero or the first milestone is flattered by however long the write took.
+	]]
+	local profile = DataService.getProfile(player)
+	if profile then
+		profile.Heat = 0
+		profile.RunHeat = 0
+		DataService.markDirty(player)
+		PlayerStateService.queuePush(player)
+	end
+
+	AnalyticsService.beginRun(player)
+	return {
+		Reset = reset,
+		Heat = profile and profile.Heat,
+		RunHeat = profile and profile.RunHeat,
+		Upgrades = profile and table.clone(profile.Upgrades),
+		HighestTool = profile and profile.HighestTool,
+		UnlockedZones = profile and table.clone(profile.UnlockedZones),
+		StopwatchStarted = true,
+	}
 end
 
 --[[
@@ -272,6 +385,21 @@ COMMANDS.reset = function(userId: any): any
 	for key, value in defaults do
 		(profile :: any)[key] = value
 	end
+
+	--[[
+		Writing the profile fields directly bypasses every mutation in PlayerStateService, so
+		nothing here invalidates the stat cache or pushes the reset values onto the character.
+
+		That is not cosmetic. DataService.save below yields inside UpdateAsync, and until the
+		cache is dropped the melt loop keeps using the pre-reset damage and radius, so a
+		player standing on ice earns at their old power throughout the save. A measured run
+		started this way is not a clean run at all — it opens with several seconds of
+		full-strength income, which is exactly the kind of silent contamination a pacing
+		measurement cannot survive.
+	]]
+	StatsService.invalidate(player)
+	UpgradeService.applyWalkSpeed(player)
+	ToolService.refreshHeldModel(player)
 
 	DataService.markDirty(player)
 	PlayerStateService.queuePush(player)

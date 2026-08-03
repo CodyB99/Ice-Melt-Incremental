@@ -212,6 +212,8 @@ function ThawService.confirm(player: Player, token: any): (number?, string?)
 	DataService.save(player)
 
 	thawCount += 1
+	-- Playtest stopwatch. The first Thaw is the documented 20-30 minute target.
+	AnalyticsService.markMilestone(player, "Thaw" .. thawNumber)
 	AnalyticsService.logEvent(player, "ThawCompleted", {
 		ThawNumber = thawNumber,
 		EmberAward = award,

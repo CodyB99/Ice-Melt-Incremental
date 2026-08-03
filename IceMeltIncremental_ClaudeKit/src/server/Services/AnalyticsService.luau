@@ -63,4 +63,79 @@ function AnalyticsService.getCounts(): { [string]: number }
 	return table.clone(counts)
 end
 
+--[[
+	Playtest milestone timing.
+
+	docs/03 says not to tune from formulas and to record real playtest timestamps. This is the
+	stopwatch for that: services report a milestone the first time a player reaches it, and the
+	elapsed seconds since that player's run started are kept so a human run can be read off
+	directly instead of being reconstructed from pulse counts afterwards.
+
+	Development and Test only, and first-wins so a repeat cannot overwrite a real timing.
+]]
+local runStart: { [Player]: number } = {}
+local milestones: { [Player]: { [string]: number } } = {}
+
+function AnalyticsService.beginRun(player: Player)
+	runStart[player] = os.clock()
+	milestones[player] = {}
+end
+
+function AnalyticsService.markMilestone(player: Player, name: string)
+	local started = runStart[player]
+	if not started then
+		return
+	end
+	local marks = milestones[player]
+	if not marks then
+		marks = {}
+		milestones[player] = marks
+	end
+	if marks[name] then
+		return
+	end
+
+	local elapsed = os.clock() - started
+	marks[name] = elapsed
+
+	if GameConfig.Debug.VerboseStartup then
+		print(
+			string.format(
+				"[IceMelt] MILESTONE %-14s %s  at %6.1fs (%.2f min)",
+				name,
+				player.Name,
+				elapsed,
+				elapsed / 60
+			)
+		)
+	end
+end
+
+function AnalyticsService.getMilestones(player: Player): { [string]: number }
+	return table.clone(milestones[player] or {})
+end
+
+function AnalyticsService.getRunSeconds(player: Player): number
+	local started = runStart[player]
+	return if started then os.clock() - started else 0
+end
+
+function AnalyticsService.clearRun(player: Player)
+	runStart[player] = nil
+	milestones[player] = nil
+end
+
+function AnalyticsService.Start()
+	local Players = game:GetService("Players")
+	local DataService = require(script.Parent:WaitForChild("DataService", 10))
+
+	-- The stopwatch starts when a profile is ready to play, not when the player connects,
+	-- so load time is not charged against the pacing targets.
+	DataService.getLoadedSignal():Connect(function(player: Player)
+		AnalyticsService.beginRun(player)
+	end)
+
+	Players.PlayerRemoving:Connect(AnalyticsService.clearRun)
+end
+
 return AnalyticsService

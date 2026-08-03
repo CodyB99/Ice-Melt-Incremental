@@ -22,7 +22,10 @@ local TOOLS: { ToolDefinition } = table.freeze({
 	table.freeze({
 		Key = "Candle",
 		DisplayName = "Candle",
-		Cost = 350,
+		-- Lowered from the 350 in docs/03. Measured at 6.16 minutes against a 2-4 minute
+		-- target; this and the Backyard Heat rise share the correction between income and
+		-- price rather than putting all of it on one value.
+		Cost = 280,
 		Power = 1.35,
 		Radius = 0.25,
 	}),
@@ -69,7 +72,17 @@ local ZONES: { [string]: ZoneDefinition } = table.freeze({
 		DisplayName = "Frozen Backyard",
 		Cost = 0,
 		Durability = 10,
-		Heat = 1,
+		--[[
+			Raised from the 1 in docs/03 after a measured playtest: Candle landed at 6.16
+			minutes against a 2-4 minute target, so early income was roughly half what the
+			documented ladder assumes. Income scales linearly with this value.
+
+			Only the tutorial zone moved. Checked against the zone ladder before changing it:
+			by the time a player can afford the Cavern their damage is high enough that
+			travel time dominates rather than durability, so the Cavern still pays about ten
+			times the Backyard per second and remains clearly worth buying.
+		]]
+		Heat = 1.5,
 		RespawnSeconds = 5,
 		Luck = 1.0,
 	}),

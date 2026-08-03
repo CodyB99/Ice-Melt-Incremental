@@ -13,9 +13,9 @@ Use `floor(baseCost * growth^(level))` unless otherwise stated.
 
 | Upgrade | Base effect | Base cost | Growth | Effect per level | Cap |
 |---|---:|---:|---:|---:|---:|
-| Power | 10 damage/sec | 15 | 1.32 | ×1.16 | 100 |
+| Power | 10 damage/sec | 15 | 1.16 | ×1.16 | 100 |
 | Radius | 4.5 studs | 60 | 1.55 | +0.45 stud | 45 |
-| Heat Value | ×1.00 | 25 | 1.38 | ×1.12 | 100 |
+| Heat Value | ×1.00 | 25 | 1.12 | ×1.12 | 100 |
 | Walk Speed | 16 | 100 | 1.70 | +0.75 | 20 levels / 31 speed |
 | Crit Chance | 3% | 250 | 1.65 | +0.5% | 25% |
 | Discovery Luck | ×1.00 | 500 | 1.75 | ×1.08 | 40 |
@@ -23,12 +23,28 @@ Use `floor(baseCost * growth^(level))` unless otherwise stated.
 
 Critical melts grant 3× Heat. Cap all final multipliers and document the order of operations.
 
+> **Revised again 2026-08-02, from a measured run.** A human playtest recorded the first
+> upgrade at 53.6s and Candle at 6.16 minutes, against 15–30s and 2–4 minutes. The Candle miss
+> was split between income and price: Frozen Backyard base Heat 1 → 1.5, and Candle 350 → 280.
+> Projected to land Candle near 3.2 minutes. The first-upgrade miss was **not** treated as an
+> economy problem — roughly 30 of those 53.6 seconds are the player orienting, which is the
+> onboarding work in `docs/06` (camera pointed at ice, "Walk into the ice to melt it"), not a
+> pricing issue.
+>
+> **Revised 2026-08-02.** Power's Growth was 1.32 and Heat Value's was 1.38. Every track had
+> cost growth above effect growth, so each level paid back more slowly than the last and income
+> decelerated instead of compounding — the first Thaw sat at roughly three hours against a
+> 20–30 minute target. Growth on these two now equals their effect per level, which keeps the
+> time to afford the next level roughly constant and makes income exponential in play time.
+> Nothing else changed: every base effect, base cost, cap, tool price and zone price is as
+> originally written. Record real playtest timings in `PROJECT_STATUS.md` before tuning further.
+
 ## Tools
 
 | # | Tool | Unlock Heat | Power multiplier | Radius bonus |
 |---:|---|---:|---:|---:|
 | 1 | Match | 0 | 1.00 | 0 |
-| 2 | Candle | 350 | 1.35 | 0.25 |
+| 2 | Candle | 280 | 1.35 | 0.25 |
 | 3 | Torch | 2,500 | 1.85 | 0.50 |
 | 4 | Blowtorch | 18,000 | 2.60 | 0.75 |
 | 5 | Flamethrower | 125,000 | 3.80 | 1.25 |
@@ -40,7 +56,7 @@ Critical melts grant 3× Heat. Cap all final multipliers and document the order 
 
 | Zone | Unlock cost | Base cell durability | Base Heat | Respawn | Discovery multiplier |
 |---|---:|---:|---:|---:|---:|
-| Frozen Backyard | 0 | 10 | 1 | 5 sec | 1.0 |
+| Frozen Backyard | 0 | 10 | 1.5 | 5 sec | 1.0 |
 | Ice Cavern | 25,000 | 250 | 30 | 7 sec | 1.5 |
 | Frozen City | 5,000,000 | 12,000 | 1,800 | 9 sec | 2.25 |
 

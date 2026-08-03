@@ -34,6 +34,7 @@ local Validate = require(UtilFolder:WaitForChild("Validate", 10))
 local ServerRoot = script.Parent.Parent
 local RemoteRegistry =
 	require(ServerRoot:WaitForChild("Runtime", 10):WaitForChild("RemoteRegistry", 10))
+local AnalyticsService = require(script.Parent:WaitForChild("AnalyticsService", 10))
 local DataService = require(script.Parent:WaitForChild("DataService", 10))
 local EconomyService = require(script.Parent:WaitForChild("EconomyService", 10))
 local PlayerStateService = require(script.Parent:WaitForChild("PlayerStateService", 10))
@@ -177,6 +178,9 @@ function ToolService.unlockNext(player: Player): (number?, string?)
 	PlayerStateService.setEquippedTool(player, nextIndex)
 	StatsService.invalidate(player)
 	ToolService.refreshHeldModel(player)
+
+	-- Playtest stopwatch. Tool 2 (Candle) is the documented 2-4 minute target.
+	AnalyticsService.markMilestone(player, "Tool" .. nextIndex .. "_" .. definition.Key)
 
 	return nextIndex, nil
 end

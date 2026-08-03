@@ -473,6 +473,47 @@ the end as open.
 Static checks after every change: `stylua` clean, `selene` 0/0/0, `luau-lsp analyze` exit 0,
 `rojo build` exit 0. Play session produced no red errors.
 
+### First real human playtest, 2026-08-02
+
+The first measured run in the project's history, replacing every simulated pacing figure.
+The server timestamps each milestone itself (`AnalyticsService.markMilestone`, readable with
+`dev:Invoke("milestones", userId)`), so these are recorded timings rather than reconstructions.
+
+Run conditions: fresh profile, Backyard, human play, no dev grants during the run.
+
+| Milestone | Target (docs/01) | **Measured** | Verdict |
+|---|---|---|---|
+| First upgrade | 15–30s | **53.6s** | SLOW |
+| Candle | 2–4 min | **6.16 min** | SLOW |
+| Ice Cavern | 8–12 min | not reached in 6.9 min | — |
+| First Thaw | 20–30 min | not reached | — |
+
+Supporting figures at the 6.86 minute mark: RunHeat 1,155, Power 9 / Value 6 / Radius 1,
+Candle unlocked and equipped, 612 cells destroyed, 3,853 pulses accepted, **0 rejections**.
+
+**What the run corrected:**
+
+1. The growth softening worked, partially. Candle was projected at ~13.7 min on the documented
+   curve and measured **6.16 min** on the softened one.
+2. Simulated pacing was **optimistic**, not pessimistic as feared. The simulation predicted the
+   first upgrade at 22s; reality was 53.6s, because a real player spends roughly 30 seconds
+   orienting — walking to the ice, reading the HUD — which a simulation starts with for free.
+   The earlier worry that the softening might be too aggressive was therefore wrong, and no
+   values were walked back.
+3. **The first-upgrade miss is not an economy problem.** 15 Heat is ~23s of melting at the base
+   rate; the rest is orientation. That is the `docs/06` onboarding work in Phase 08 (camera
+   pointed at ice, "Walk into the ice to melt it"), not a pricing issue, and it should not be
+   used to justify further economy changes.
+4. **The Candle miss is an economy problem**, and was split between income and price rather than
+   loaded onto one value: Backyard Heat per cell 1 → 1.5 and Candle 350 → 280. Projected to land
+   near 3.2 min. **Not yet re-measured** — the confirming run is outstanding.
+
+Also found and fixed while setting this up: `DevCommandService.reset` wrote profile defaults
+directly without invalidating the stat cache or re-applying character state, so the melt loop
+kept using the pre-reset damage throughout the following save yield. The first "clean" run
+started with 64 Heat already earned. Same defect class as the Thaw bug, and it would have
+silently flattered every measurement taken this way.
+
 ### Correction: the recorded economy diagnosis was wrong in magnitude
 
 The Phase 06 note that the first Thaw takes "about 20 days" extrapolated the measured

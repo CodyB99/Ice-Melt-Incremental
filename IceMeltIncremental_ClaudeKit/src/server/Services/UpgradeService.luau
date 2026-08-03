@@ -31,6 +31,7 @@ local Validate = require(UtilFolder:WaitForChild("Validate", 10))
 local ServerRoot = script.Parent.Parent
 local RemoteRegistry =
 	require(ServerRoot:WaitForChild("Runtime", 10):WaitForChild("RemoteRegistry", 10))
+local AnalyticsService = require(script.Parent:WaitForChild("AnalyticsService", 10))
 local DataService = require(script.Parent:WaitForChild("DataService", 10))
 local EconomyService = require(script.Parent:WaitForChild("EconomyService", 10))
 local PlayerStateService = require(script.Parent:WaitForChild("PlayerStateService", 10))
@@ -98,6 +99,9 @@ function UpgradeService.purchase(player: Player, key: string): (number?, string?
 
 	StatsService.invalidate(player)
 	UpgradeService.applyWalkSpeed(player)
+
+	-- Playtest stopwatch. First upgrade of the run is the first documented pacing target.
+	AnalyticsService.markMilestone(player, "FirstUpgrade")
 
 	return level + 1, nil
 end

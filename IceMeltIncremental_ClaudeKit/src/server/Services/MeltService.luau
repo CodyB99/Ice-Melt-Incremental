@@ -104,7 +104,12 @@ local MAX_AUTO_PULSES_PER_SWEEP = 8
 
 -- Diagnostics for the development overlay. Server-side counters only.
 local stats = {
+	-- A pulse that passed validation AND found ice to damage.
 	Accepted = 0,
+	-- A pulse that passed validation but had nothing in range. Counted apart from Accepted
+	-- so the accepted figure keeps meaning "did work"; lumping the two together made an idle
+	-- player standing on cleared ice look like a busy one.
+	Idle = 0,
 	Rejected = 0,
 	AutoPulses = 0,
 	CellsDestroyed = 0,
@@ -295,12 +300,27 @@ local function onMeltPulse(player: Player, payload: any)
 	local results, totalHeat, destroyed =
 		applyMelt(player, zoneKey, meltStats, position, meltStats.Damage * delta)
 
+	--[[
+		Nothing in range is a normal outcome, not an error, and it needs no reply.
+
+		The client uses MeltResult purely for feedback: an empty batch produces no burst, no
+		sound and no popup, so answering one was a remote a pulse that told the client
+		nothing. A player standing on ice they have already cleared pulses ten times a second
+		while it respawns, so this was ten wasted remotes a second each way, per player.
+
+		The clock above is still advanced, which is what stops the idle time being banked and
+		paid out as a burst on the next pulse that does reach ice.
+	]]
+	if #results == 0 then
+		stats.Idle += 1
+		return
+	end
+
 	stats.Accepted += 1
 	stats.CellsDestroyed += destroyed
 	stats.HeatGranted += totalHeat
 
-	-- One remote for the whole pulse, carrying every cell touched. An empty batch is a
-	-- normal outcome rather than an error: it tells the client to stop predicting.
+	-- One remote for the whole pulse, carrying every cell touched.
 	RemoteRegistry.fireClient(RemoteNames.Name.MeltResult, player, {
 		Sequence = sequence,
 		ZoneKey = zoneKey,
@@ -393,6 +413,7 @@ end
 function MeltService.getStats()
 	return {
 		Accepted = stats.Accepted,
+		Idle = stats.Idle,
 		Rejected = stats.Rejected,
 		AutoPulses = stats.AutoPulses,
 		CellsDestroyed = stats.CellsDestroyed,

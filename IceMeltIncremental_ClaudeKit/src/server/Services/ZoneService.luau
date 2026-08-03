@@ -37,6 +37,7 @@ local Validate = require(UtilFolder:WaitForChild("Validate", 10))
 local ServerRoot = script.Parent.Parent
 local RemoteRegistry =
 	require(ServerRoot:WaitForChild("Runtime", 10):WaitForChild("RemoteRegistry", 10))
+local AnalyticsService = require(script.Parent:WaitForChild("AnalyticsService", 10))
 local DataService = require(script.Parent:WaitForChild("DataService", 10))
 local EconomyService = require(script.Parent:WaitForChild("EconomyService", 10))
 local PlayerStateService = require(script.Parent:WaitForChild("PlayerStateService", 10))
@@ -172,6 +173,9 @@ function ZoneService.unlock(player: Player, zoneKey: string): (boolean, string?)
 		character to move. Warn rather than fail the unlock, which would imply the Heat was
 		not spent.
 	]]
+	-- Playtest stopwatch. The Cavern is the documented 8-12 minute target.
+	AnalyticsService.markMilestone(player, "Zone_" .. zoneKey)
+
 	if not placeCharacter(player, zoneKey) then
 		warn(
 			string.format(
