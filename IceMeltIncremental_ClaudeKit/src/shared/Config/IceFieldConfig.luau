@@ -15,8 +15,30 @@
 ]]
 
 return table.freeze({
-	-- 16 x 16 = 256 cells per zone, 768 total. Spacing 6 studs gives a 96 x 96 stud field,
-	-- comfortably inside the 220 x 220 zone slab built by WorldSkeleton.
+	--[[
+		16 x 16 = 256 cells per zone, 768 total, on a 6 stud pitch giving a 96 x 96 field
+		inside the 220 x 220 zone slab.
+
+		Pitch sets the early pacing, so it is tuned rather than picked.
+
+		Power is 10 damage per second (docs/03) and a Backyard cell has 10 durability, so a
+		cell breaks after one full second inside the melt radius. What matters is therefore
+		how many cells the base 4.5 stud radius holds at once, which is set by the pitch.
+
+		Measured with realistic play - walk to the ice, then short hops with a pause in each
+		spot - against the 15 to 30 second first-upgrade target in docs/01:
+		    8 stud pitch -> 0.34 Heat/sec, first upgrade ~43s (too slow)
+		    6 stud pitch -> see PROJECT_STATUS Phase 04 evidence
+
+		Pitch is the right lever because it is a choice made in this file. Power's cost of
+		15 and Backyard's durability of 10 come from docs/03 and should not be bent to fix a
+		pacing problem this file created.
+
+		Note for later tuning: damage accrues only while a cell is inside the radius, so a
+		player sprinting across the field melts far less than one standing in it. That is
+		intended - the ice melts around you - but any pacing measurement has to model
+		realistic movement rather than a continuous sprint, or it will read far too low.
+	]]
 	GridSize = 16,
 	Spacing = 6,
 

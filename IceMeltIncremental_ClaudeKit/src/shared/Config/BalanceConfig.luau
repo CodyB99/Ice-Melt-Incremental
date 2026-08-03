@@ -9,9 +9,14 @@
 	    Scaling = "Additive"   -> BaseEffect + (PerLevel * level)
 
 	Documented order of operations for melt damage, so later phases cannot drift:
-	    damage = PowerStat * ToolPower
-	    heat   = CellHeat * ValueStat * ZoneHeat * CritMultiplier (if critical)
+	    damagePerSecond = PowerStat * ToolPower
+	    damageThisPulse = damagePerSecond * secondsSinceLastPulse
+	    heat            = CellHeat * ValueStat * ZoneHeat * CritMultiplier (if critical)
 	Radius and luck are resolved the same way and clamped by Limits before use.
+
+	Power is a per-second rate, matching docs/03. MeltService scales it by elapsed time
+	rather than applying it once per pulse, so the melt rate does not change with pulse
+	frequency and a faster client gains nothing.
 
 	Crit caps at 44 levels: 3% + 44 * 0.5% = 25%, matching the 25% ceiling in docs/03.
 ]]

@@ -81,9 +81,10 @@ function DebugOverlayController.Start()
 	screenGui.Parent = playerGui
 
 	local label = Instance.new("TextLabel")
-	-- Top-left, away from the thumb-safe zones docs/06 reserves for real UI.
+	-- Below the HUD's Heat panel, which occupies the top-left corner. Overlapping it made
+	-- both unreadable.
 	label.AnchorPoint = Vector2.new(0, 0)
-	label.Position = UDim2.new(0, 8, 0, 8)
+	label.Position = UDim2.new(0, 12, 0, 76)
 	label.Size = UDim2.new(0, 300, 0, 96)
 	label.BackgroundColor3 = Color3.fromRGB(12, 16, 24)
 	label.BackgroundTransparency = 0.35

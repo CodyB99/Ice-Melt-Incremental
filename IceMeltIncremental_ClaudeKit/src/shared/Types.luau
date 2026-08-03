@@ -99,6 +99,23 @@ export type PlayerProfile = {
 }
 
 --[[
+	Final derived stats, computed once on the server and replicated as finished numbers.
+
+	The client could recompute these from Upgrades with the shared StatMath, but then two
+	places would decide what a stat means and a future pass, boost, or cap would have to be
+	applied in both. Sending the finished values keeps one authority.
+]]
+export type DerivedStats = {
+	Damage: number,
+	Radius: number,
+	HeatMultiplier: number,
+	CritChance: number,
+	Luck: number,
+	WalkSpeed: number,
+	AutoRate: number,
+}
+
+--[[
 	What the owning client is allowed to see. Deliberately excludes ReceiptHistory and
 	every anti-exploit counter; those stay server-only. See docs/02 "Replication".
 ]]
@@ -111,6 +128,7 @@ export type ReplicatedPlayerState = {
 	EquippedTool: number,
 	UnlockedZones: { [string]: boolean },
 	DiscoveryCount: number,
+	Stats: DerivedStats,
 }
 
 export type ReceiptRecord = {

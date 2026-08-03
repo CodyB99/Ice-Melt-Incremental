@@ -47,6 +47,7 @@ local RemoteRegistry =
 local DataService = require(script.Parent:WaitForChild("DataService", 10))
 local IceFieldService = require(script.Parent:WaitForChild("IceFieldService", 10))
 local PlayerStateService = require(script.Parent:WaitForChild("PlayerStateService", 10))
+local StatsService = require(script.Parent:WaitForChild("StatsService", 10))
 
 type MeltRejectReason = Types.MeltRejectReason
 
@@ -64,6 +65,26 @@ local ZONE_TOLERANCE_STUDS = 20
 
 local buckets: { [Player]: Validate.TokenBucket } = {}
 local lastSequence: { [Player]: number } = {}
+local lastPulseAt: { [Player]: number } = {}
+
+--[[
+	Damage is per second, not per pulse.
+
+	docs/03 specifies Melt Power as "10 damage/sec". Applying that figure once per pulse
+	made it ten times stronger than specified, which broke the balance curve outright:
+	Backyard cells died to a single pulse, so buying Power changed nothing in the zone every
+	new player starts in.
+
+	Scaling by elapsed time also removes pulse rate as an exploit axis. A client that pulses
+	faster now covers the same ground in the same time rather than dealing proportionally
+	more damage, so the rate limiter protects bandwidth rather than being the only thing
+	standing between a fast client and free progress.
+
+	The delta is clamped: without a ceiling, a player who stops pulsing and resumes would
+	land one enormous accumulated hit.
+]]
+local NOMINAL_PULSE_INTERVAL = 1 / GameConfig.Limits.MaxMeltPulsesPerSecond
+local MAX_PULSE_DELTA = NOMINAL_PULSE_INTERVAL * 3
 
 -- Diagnostics for the development overlay. Server-side counters only.
 local stats = {
@@ -187,13 +208,14 @@ local function onMeltPulse(player: Player, payload: any)
 	-- cannot burn a sequence number and stall the client.
 	lastSequence[player] = sequence
 
-	local profile = DataService.getProfile(player)
-	if not profile then
+	-- Stats come from the one module that computes them, cached per player and zone.
+	-- Recomputing seven upgrade curves on every pulse, twelve times a second per player,
+	-- would be pure waste.
+	local meltStats = StatsService.get(player, zoneKey)
+	if not meltStats then
 		reject(player, "NoProfile")
 		return
 	end
-
-	local meltStats = StatMath.computeMeltStats(profile.Upgrades, profile.EquippedTool, zoneKey)
 
 	local cells = IceFieldService.queryCells(
 		zoneKey,
@@ -214,6 +236,16 @@ local function onMeltPulse(player: Player, payload: any)
 		return
 	end
 
+	-- Elapsed time since this player's last accepted pulse, clamped.
+	local now = os.clock()
+	local previousPulse = lastPulseAt[player]
+	local delta = if previousPulse
+		then math.clamp(now - previousPulse, 0, MAX_PULSE_DELTA)
+		else NOMINAL_PULSE_INTERVAL
+	lastPulseAt[player] = now
+
+	local damagePerCell = meltStats.Damage * delta
+
 	local results: { Types.MeltCellResult } = {}
 	local totalHeat = 0
 	local destroyed = 0
@@ -222,7 +254,7 @@ local function onMeltPulse(player: Player, payload: any)
 		-- Crits multiply the reward, not the damage. Scaling damage as well would make
 		-- Crit a second Power stat and double-dip against the balance curve.
 		local critical = math.random() < meltStats.CritChance
-		local damage = meltStats.Damage
+		local damage = damagePerCell
 
 		local wasDestroyed = IceFieldService.damageCell(cell, damage)
 
@@ -318,6 +350,7 @@ local function onPlayerRemoving(player: Player)
 	buckets[player] = nil
 	lastSequence[player] = nil
 	lastEchoAt[player] = nil
+	lastPulseAt[player] = nil
 end
 
 function MeltService.Init()

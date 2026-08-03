@@ -38,6 +38,7 @@ local ServerRoot = script.Parent.Parent
 local RemoteRegistry =
 	require(ServerRoot:WaitForChild("Runtime", 10):WaitForChild("RemoteRegistry", 10))
 local DataService = require(script.Parent:WaitForChild("DataService", 10))
+local StatsService = require(script.Parent:WaitForChild("StatsService", 10))
 
 type PlayerProfile = Types.PlayerProfile
 type ReplicatedPlayerState = Types.ReplicatedPlayerState
@@ -68,7 +69,7 @@ end
 	Builds the client-facing view. This is an allow-list: every field is named explicitly,
 	so adding a field to the profile cannot accidentally start replicating it.
 ]]
-local function buildSnapshot(profile: PlayerProfile): ReplicatedPlayerState
+local function buildSnapshot(player: Player, profile: PlayerProfile): ReplicatedPlayerState
 	return {
 		Heat = profile.Heat,
 		Embers = profile.Embers,
@@ -78,6 +79,9 @@ local function buildSnapshot(profile: PlayerProfile): ReplicatedPlayerState
 		EquippedTool = profile.EquippedTool,
 		UnlockedZones = table.clone(profile.UnlockedZones),
 		DiscoveryCount = countDiscoveries(profile),
+		-- Finished numbers, not inputs. The client shows what the server decided rather
+		-- than recomputing the balance curves itself.
+		Stats = StatsService.getForDisplay(player, ContentConfig.StartingZone),
 	}
 end
 
@@ -86,7 +90,7 @@ function PlayerStateService.getSnapshot(player: Player): ReplicatedPlayerState?
 	if not profile then
 		return nil
 	end
-	return buildSnapshot(profile)
+	return buildSnapshot(player, profile)
 end
 
 function PlayerStateService.isReady(player: Player): boolean

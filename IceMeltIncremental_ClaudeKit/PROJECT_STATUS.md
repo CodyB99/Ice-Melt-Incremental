@@ -179,6 +179,71 @@ Two efficiency problems found and fixed while testing:
    warning per pulse. Echoes are now throttled to one per reason per second, and remain
    development-only so a live server never tells a client which check it failed.
 
+### Phase 04 evidence
+
+Run 2026-08-02 in Studio play mode against `DataStore(IceMelt_PlayerData_DEV_v1)`.
+
+| Phase | Command / test | Result |
+|---|---|---|
+| 04 | `stylua`, `selene`, `rojo build`, `luau-lsp analyze` | **Pass**, all exit 0 |
+| 04 | First upgrade reachable in 15–30s | **Pass** — 28.2s and 18.1s across two runs with realistic play (walk to the ice, then short hops with a pause in each spot) |
+| 04 | Candle reachable in roughly 2–4 minutes | **Not met** — see the balance finding below |
+| 04 | Client cannot buy free or negative upgrades | **Pass** — a forged `{Key="Power", Cost=0}` was charged the real 15 Heat because the server ignores client-supplied cost entirely. `Cost=-99999`, `Level=100`, and `Levels=50` were all ignored the same way. Unknown key, numeric key, 500-character key, a bare string, and nil were each rejected as `InvalidPayload` or `UnknownUpgrade` |
+| 04 | Client cannot equip locked tools | **Pass** — equipping index 8 and index 2 while owning only 1 gave `NotUnlocked`; index 0, -1, 2.5, NaN, and a string gave `InvalidPayload`. A forged `UnlockTool {Index=8, Cost=0}` was ignored and treated as "buy the next tool", failing on price. HighestTool and EquippedTool both remained 1 |
+| 04 | Tool changes visibly alter melt behaviour | **Pass** — unlocking Candle through the real remote charged exactly 350, moved HighestTool and EquippedTool to 2, raised Damage 10 → 13.5 (ratio 1.35, exactly Candle's Power multiplier) and Radius 4.5 → 4.75 (+0.25, exactly Candle's bonus), and swapped the held model to the Candle silhouette with its glow and light |
+| 04 | Costs and effects come from shared configuration | **Pass** — the charged 350 and the 1.35 damage ratio match `ContentConfig` exactly; the HUD reads costs from `StatMath.upgradeCost`, never a literal |
+
+Bug found and fixed during this phase: **Power was applied per pulse rather than per second.**
+`docs/03` specifies Melt Power as "10 damage/sec", but MeltService applied that figure on every
+pulse, which at ten pulses a second made it ten times stronger than specified. Backyard cells
+died to a single pulse, so buying Power changed nothing in the zone every new player starts in.
+It was also an exploit surface: a client pulsing at 12/s instead of 10/s dealt 20% more damage.
+Damage is now scaled by elapsed time since the player's last accepted pulse, clamped, so the
+melt rate is independent of pulse frequency.
+
+Also fixed: the development overlay was drawn on top of the HUD's Heat panel, making both
+unreadable.
+
+### Balance finding: the two pacing targets are in tension
+
+Measured Heat rate for a new player with realistic play: **0.58 Heat/sec**. That puts the
+first upgrade at 18–28s, inside the 15–30s target, and Candle at roughly **10 minutes**
+against a 2–4 minute target.
+
+The gap is structural rather than a tuning slip:
+
+- The first upgrade costs 15 Heat and Candle costs 350, a 23× gap, while the time targets
+  (15–30s versus 120–240s) are only about 8× apart. The Heat rate therefore has to roughly
+  triple within the first few minutes.
+- The upgrades that raise the Heat rate cannot deliver that in the window. Buying Value to
+  level 8 costs about 804 Heat and Radius to level 5 about 866, both more than the 350 being
+  saved for, and their per-level effects (×1.12 and +0.45 studs) are too small to compound
+  quickly at these prices.
+- Movement matters more than expected: at base walk speed 16 and radius 4.5, a cell is inside
+  the radius for about 0.56s and needs 1.0s of contact to break, so a single pass never
+  destroys a cell. Damage does persist, so cells break on a later pass, but continuous
+  sprinting melts almost nothing (measured 0.03 Heat/sec) and standing still is also poor
+  (0.16 Heat/sec) because a cleared radius then waits out the 5s respawn.
+
+Efficient play has more headroom than the scripted player achieved: with a 5s respawn and
+roughly two cells in radius, the ceiling is near 2 Heat/sec, which would put Candle around
+3 minutes. Confirming that needs a human playtest rather than a scripted one; a bot is a poor
+proxy for how efficiently a real player sweeps ice.
+
+Deliberately **not** auto-tuned. `docs/03` says not to tune from formulas alone and to record
+real playtest timestamps, and the levers that would close the gap (Candle's 350 cost,
+Backyard's Heat value of 1, the upgrade cost curves) are all specified values that should not
+be changed on simulated data. Owner decision, with three options:
+
+1. Lower early tool costs so the ladder matches the documented minutes.
+2. Raise Backyard Heat per cell, and raise the first upgrade's cost to keep the 15–30s beat.
+3. Make the first few Value and Radius levels cheaper or stronger so the rate compounds sooner.
+
+Pitch was tuned during this phase and is the one lever that is a local choice rather than a
+documented value. Measured across four pitches with realistic play: 6 studs gave 0.58 Heat/sec
+(first upgrade 18–28s, in window), 8 studs gave 0.34 (~43s), 9 studs gave 0.13 (~110s). Kept
+at 6.
+
 ## Acceptance criteria — Phase 00
 
 | Criterion | Status |
@@ -250,15 +315,33 @@ each believe they own the profile locks.
 Not a live-server concern, since real servers use their own `game.JobId`. In Studio, avoid
 running a second play session while a multi-client test is open.
 
+## Acceptance criteria — Phase 04
+
+| Criterion | Status |
+|---|---|
+| First upgrade reachable in 15–30 seconds | **Met** — 18.1s and 28.2s measured |
+| Candle reachable in roughly 2–4 minutes | **Not met** — ~10 min measured. See the balance finding above; needs an owner tuning decision plus a human playtest |
+| Client cannot buy free/negative upgrades or equip locked tools | **Met** |
+| Tool changes visibly alter melt behaviour | **Met** |
+| Costs and effects come from shared configuration | **Met** |
+
 ## Next action
 
-Run Phase 04 — Heat economy, upgrades, tool progression, and number formatting.
+Two things before Phase 05:
 
-Phase 04 must preserve: the `EnvironmentConfig` production guard, the closed remote schema,
-one development-only startup line per bootstrap, `Init` never yielding, and gameplay gated
-on `DataService.isLoaded(player)`.
+1. **Play the game yourself for five minutes** and record how long Candle actually takes. The
+   scripted player reaches 0.58 Heat/sec; the ceiling is nearer 2. Only a human run settles
+   whether the economy needs changing or just the bot does.
+2. **Decide the tuning question** in the balance finding above, if the playtest confirms the
+   gap.
 
-`StatMath.upgradeCost` already implements the documented cost curve and returns nil at the
-cap; use it rather than recomputing. Spend Heat only through `PlayerStateService.addHeat`
-with a negative amount, and apply levels only through `setUpgradeLevel`, which validates
-against the configured cap. Both already replicate and mark the profile dirty.
+Then run Phase 05 — three zones, gates, world construction, and travel.
+
+Phase 05 must preserve: the `EnvironmentConfig` production guard, the closed remote schema,
+one development-only startup line per bootstrap, `Init` never yielding, and gameplay gated on
+`DataService.isLoaded(player)`.
+
+`StatsService.get` takes a zone key and already caches per zone, so travel should call
+`StatsService.invalidate` on arrival. `MeltService.resolveZone` currently derives the zone from
+the player's position against `WorldConfig` rectangles; travel must keep that true rather than
+trusting a client-claimed zone.
