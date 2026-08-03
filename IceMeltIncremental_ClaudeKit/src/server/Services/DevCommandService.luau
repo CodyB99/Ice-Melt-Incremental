@@ -33,14 +33,20 @@ local ServerStorage = game:GetService("ServerStorage")
 local Shared = ReplicatedStorage:WaitForChild("IceMelt", 10):WaitForChild("Shared", 10)
 local ConfigFolder = Shared:WaitForChild("Config", 10)
 
+local BalanceConfig = require(ConfigFolder:WaitForChild("BalanceConfig", 10))
+local ContentConfig = require(ConfigFolder:WaitForChild("ContentConfig", 10))
 local GameConfig = require(ConfigFolder:WaitForChild("GameConfig", 10))
 local WorldConfig = require(ConfigFolder:WaitForChild("WorldConfig", 10))
+local DiscoveryMath = require(Shared:WaitForChild("Util", 10):WaitForChild("DiscoveryMath", 10))
 
 local DataFolder = script.Parent.Parent:WaitForChild("Data", 10)
 local ProfileSchema = require(DataFolder:WaitForChild("ProfileSchema", 10))
 
 local AnalyticsService = require(script.Parent:WaitForChild("AnalyticsService", 10))
+local AnnouncementService = require(script.Parent:WaitForChild("AnnouncementService", 10))
 local DataService = require(script.Parent:WaitForChild("DataService", 10))
+local DiscoveryService = require(script.Parent:WaitForChild("DiscoveryService", 10))
+local EconomyService = require(script.Parent:WaitForChild("EconomyService", 10))
 local IceFieldService = require(script.Parent:WaitForChild("IceFieldService", 10))
 local MeltService = require(script.Parent:WaitForChild("MeltService", 10))
 local PlayerStateService = require(script.Parent:WaitForChild("PlayerStateService", 10))
@@ -136,6 +142,215 @@ end
 
 COMMANDS.thawStats = function(): any
 	return ThawService.getStats()
+end
+
+-- === Phase 07: discoveries and chains ======================================
+
+--[[
+	The normalised rarity table for a zone at a given luck.
+
+	Reads the same function the roll uses, so what this prints is what the game will do rather
+	than a second opinion about it.
+]]
+COMMANDS.discoveryWeights = function(zoneKey: any, luck: any): any
+	if type(zoneKey) ~= "string" then
+		return "usage: discoveryWeights(zoneKey, luck)"
+	end
+	local rows = DiscoveryMath.rarityRows(zoneKey, if type(luck) == "number" then luck else 1)
+
+	local lines: { string } = {}
+	for _, row in rows do
+		table.insert(
+			lines,
+			string.format(
+				"%-10s base %6.2f  weight %10.3f  %6.3f%%",
+				row.Rarity,
+				row.BaseWeight,
+				row.Weight,
+				row.Probability * 100
+			)
+		)
+	end
+	return {
+		Zone = zoneKey,
+		LuckRequested = luck,
+		LuckUsed = DiscoveryMath.safeLuck(if type(luck) == "number" then luck else 1),
+		Rows = lines,
+	}
+end
+
+--[[
+	Enumerates which discoveries each zone can produce.
+
+	Enumeration rather than sampling: sampling can only fail to observe a violation, whereas
+	walking the pools proves the "obtainable only in valid zones" criterion outright.
+]]
+COMMANDS.discoveryZoneMatrix = function(): any
+	local result: { [string]: any } = {}
+	local violations: { string } = {}
+
+	for _, zoneKey in ContentConfig.ZoneOrder do
+		local keys: { string } = {}
+		for _, rarity in DiscoveryMath.zoneRarities(zoneKey) do
+			for _, definition in DiscoveryMath.zoneDiscoveries(zoneKey, rarity) do
+				table.insert(keys, string.format("%s(%s)", definition.Key, definition.Rarity))
+				if definition.Zone ~= zoneKey then
+					table.insert(
+						violations,
+						string.format(
+							"%s is pooled in %s but belongs to %s",
+							definition.Key,
+							zoneKey,
+							definition.Zone
+						)
+					)
+				end
+			end
+		end
+		table.sort(keys)
+		result[zoneKey] = {
+			Count = #keys,
+			Rarities = DiscoveryMath.zoneRarities(zoneKey),
+			Keys = keys,
+		}
+	end
+
+	result.TotalInCatalogue = #ContentConfig.Discoveries
+	result.Violations = if #violations == 0 then "none" else violations
+	return result
+end
+
+--[[
+	Samples the roll and reports the observed distribution, plus whether any sample produced a
+	discovery outside the zone it was rolled in.
+]]
+COMMANDS.discoveryRoll = function(zoneKey: any, samples: any, luck: any): any
+	if type(zoneKey) ~= "string" then
+		return "usage: discoveryRoll(zoneKey, samples, luck)"
+	end
+	local count = if type(samples) == "number"
+		then math.clamp(math.floor(samples), 1, 500000)
+		else 10000
+	local useLuck = if type(luck) == "number" then luck else 1
+
+	local rng = Random.new()
+	local byRarity: { [string]: number } = {}
+	local byKey: { [string]: number } = {}
+	local outOfZone = 0
+	local nils = 0
+
+	for _ = 1, count do
+		local definition =
+			DiscoveryMath.pickDiscovery(zoneKey, useLuck, rng:NextNumber(), rng:NextNumber())
+		if not definition then
+			nils += 1
+			continue
+		end
+		byRarity[definition.Rarity] = (byRarity[definition.Rarity] or 0) + 1
+		byKey[definition.Key] = (byKey[definition.Key] or 0) + 1
+		if definition.Zone ~= zoneKey then
+			outOfZone += 1
+		end
+	end
+
+	local lines: { string } = {}
+	for _, rarity in BalanceConfig.Discovery.RarityOrder do
+		local n = byRarity[rarity]
+		if n then
+			table.insert(lines, string.format("%-10s %7d  %6.3f%%", rarity, n, n / count * 100))
+		end
+	end
+
+	return {
+		Zone = zoneKey,
+		Luck = useLuck,
+		Samples = count,
+		Observed = lines,
+		DistinctKeys = (function()
+			local t = 0
+			for _ in byKey do
+				t += 1
+			end
+			return t
+		end)(),
+		OutOfZoneAwards = outOfZone,
+		NilRolls = nils,
+	}
+end
+
+--[[
+	Awards a specific discovery through the real path: same profile write, same reward, same
+	analytics, same announcement. Deliberately does NOT skip the zone check by inventing a
+	zone — it uses the player's actual one, so a forced award cannot prove something the real
+	roll could not.
+]]
+COMMANDS.forceDiscovery = function(userId: any, key: any): any
+	local player = resolvePlayer(userId)
+	if not player then
+		return "no such player in this server"
+	end
+	if type(key) ~= "string" then
+		return "usage: forceDiscovery(userId, discoveryKey)"
+	end
+
+	local definition = DiscoveryMath.get(key)
+	if not definition then
+		return string.format("unknown discovery %q", key)
+	end
+
+	local zoneKey = PlayerStateService.getCurrentZone(player)
+	local stats = StatsService.get(player, zoneKey)
+	if not stats then
+		return "no stats for player"
+	end
+
+	local before = PlayerStateService.getDiscoveryCount(player)
+	local heatBefore = PlayerStateService.getHeat(player)
+	local roll = DiscoveryService.award(player, zoneKey, stats, definition)
+
+	return {
+		Awarded = roll ~= nil,
+		Key = key,
+		DefinitionZone = definition.Zone,
+		PlayerZone = zoneKey,
+		Rarity = definition.Rarity,
+		IsNew = roll and roll.IsNew,
+		HeatAwarded = roll and string.format("%.2f", roll.HeatAwarded),
+		DistinctBefore = before,
+		DistinctAfter = PlayerStateService.getDiscoveryCount(player),
+		HeatDelta = string.format("%.2f", PlayerStateService.getHeat(player) - heatBefore),
+	}
+end
+
+COMMANDS.clearDiscoveries = function(userId: any): any
+	local player = resolvePlayer(userId)
+	if not player then
+		return "no such player in this server"
+	end
+	local profile = DataService.getProfile(player)
+	if not profile then
+		return "profile not loaded"
+	end
+	profile.Discoveries = {}
+	DataService.markDirty(player)
+	PlayerStateService.queuePush(player)
+	return { Cleared = true, DistinctNow = PlayerStateService.getDiscoveryCount(player) }
+end
+
+COMMANDS.discoveryStats = function(): any
+	return DiscoveryService.getStats()
+end
+
+COMMANDS.announceStats = function(): any
+	return AnnouncementService.getStats()
+end
+
+COMMANDS.analyticsCounts = function(): any
+	return AnalyticsService.getCounts()
+end
+
+COMMANDS.economyLedger = function(): any
+	return EconomyService.getLedger()
 end
 
 --[[
