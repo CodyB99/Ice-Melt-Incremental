@@ -10,7 +10,7 @@ Updated: 2026-08-02
 - [x] 03 — Ice fields, server-authoritative melt loop, and pooling
 - [ ] 04 — Heat economy, upgrades, tool progression, and number formatting — ⚠️ built and secure; Candle pacing target not met
 - [ ] 05 — Three zones, gates, world construction, and travel — ⚠️ built and secure; Cavern pacing target not met, multiplayer performance not run
-- [ ] 06 — Thaw prestige and permanent Ember progression
+- [ ] 06 — Thaw prestige and permanent Ember progression — ⚠️ built and secure; first-Thaw pacing target not met
 - [ ] 07 — Frozen discoveries, rarity, collection index, and chain reactions
 - [ ] 08 — UI, onboarding, feedback, rewards, codes, and accessibility
 - [ ] 09 — Passes, developer products, shop, and safe receipts
@@ -303,6 +303,52 @@ from real playtests rather than formulas. The concrete options remain as recorde
 4. Make effect growth exceed cost growth on at least one track, so there is a compounding
    route. Value at ×1.12 effect against ×1.38 cost is the clearest candidate to revisit.
 
+### Phase 06 evidence
+
+Run 2026-08-02 in Studio play mode against `DataStore(IceMelt_PlayerData_DEV_v1)`.
+
+| Phase | Command / test | Result |
+|---|---|---|
+| 06 | `stylua`, `selene`, `rojo build`, `luau-lsp analyze` | **Pass**, all exit 0 |
+| 06 | Award and multiplier match `docs/03` | **Pass** — 10,000,000 run Heat previewed 3 Embers (`floor(10^0.55)`), projected multiplier 1.30635 (`1 + 3^0.65 × 0.15`) |
+| 06 | Replayed confirmation cannot duplicate Embers | **Pass** — one `ConfirmThaw:Ok`, four replays of the same token denied `NoPendingThaw`. Embers went 0 → 3, not 0 → 15. The log contains exactly one `ThawCompleted` |
+| 06 | Fabricated and malformed confirmations | **Pass** — invented token denied `StaleToken`; numeric, empty, string, and nil payloads denied `InvalidPayload` |
+| 06 | Token invalidated by a rejoin | **Pass** — a token issued before a save/release/load round trip was denied `NoPendingThaw` afterwards, with no Embers granted and no Thaw counted |
+| 06 | Reset fields match documentation | **Pass** — Heat 0, RunHeat 0, all seven upgrades 0, tools back to 1/1, zones back to Backyard only |
+| 06 | Retained fields match documentation | **Pass** — Embers 3, Thaws 1, LifetimeHeat 10,000,000, SchemaVersion 1, all surviving a rejoin |
+| 06 | Player is moved out of a now-locked zone | **Pass** — thawing while standing in the Cavern returned the player to the Backyard, so the ZoneService patrol never had to treat them as trespassing |
+| 06 | Second run is noticeably faster | **Pass** — measured Heat per cell after the Thaw was 1.3063515, exactly the Ember multiplier, against 1.0 before |
+| 06 | Thaw analytics logged | **Pass** — `ThawScreenOpened`, `ThawCompleted` (with thaw number, award, Heat banked, total Embers), and `FirstThawCompleted` |
+| 06 | First Thaw in roughly 20–30 minutes | **Not met** — see below |
+
+Design notes worth carrying forward:
+
+- The confirmation token is an **intent nonce, not a promise**. The award is always
+  recomputed at confirmation from live state, so a stale token cannot lock in a payout from
+  a richer moment, and eligibility is re-checked rather than trusted from the preview.
+- The token is spent **before** any state changes, so a confirmation arriving twice in the
+  same frame finds nothing pending the second time.
+- `applyThawReset` writes each field explicitly instead of clearing and rebuilding, so a
+  profile field added in a later phase is retained by default. Silently wiping something new
+  because a reset function was too clever is how prestige systems destroy progress.
+- A permanent Ember node set was **not** built. `docs/03` lists "permanent Ember nodes" among
+  retained fields but never specifies any, and the phase says to add them "if documented".
+  Inventing a progression system that no document describes would be scope invention.
+
+### Balance finding, third data point
+
+The first Thaw needs 1,000,000 run Heat. At the measured rate of roughly 0.58 Heat/sec that is
+about 20 days, against a 20–30 minute target.
+
+This is the same single root cause recorded under Phases 04 and 05, now visible at three
+scales: Candle at 350 (~10 min vs 2–4), Cavern at 25,000 (~12 hours vs 8–12 min), and the
+first Thaw at 1,000,000 (~20 days vs 20–30 min). The mechanism is unchanged — every upgrade in
+`docs/03` has cost growth exceeding effect growth, so income decelerates instead of compounding.
+
+The Ember multiplier does not rescue it: at 3 Embers it is 1.31×, and being sub-linear
+(exponent 0.65) it is deliberately modest. It is designed to reward a completed Thaw, not to
+be the mechanism that makes the first one reachable.
+
 ## Acceptance criteria — Phase 00
 
 | Criterion | Status |
@@ -394,28 +440,40 @@ running a second play session while a multi-client test is open.
 | Zone switching does not leak fields/effects or multiply loops | **Met** |
 | Largest zone performance in a multiplayer test | **Not run** |
 
+## Acceptance criteria — Phase 06
+
+| Criterion | Status |
+|---|---|
+| First Thaw reachable in roughly 20–30 minutes | **Not met** — ~20 days at the measured rate. Same single root cause as Phases 04 and 05 |
+| Replayed/stale confirmation cannot duplicate Embers | **Met** — verified against replay, fabrication, malformed payloads, and a rejoin |
+| Reset and retained fields exactly match documentation | **Met** |
+| Player resumes a noticeably faster second run | **Met** — Heat per cell 1.0 → 1.3063515, exactly the Ember multiplier |
+
 ## Next action
 
-The economy is now the blocking issue and it affects every phase from here. Phases 06 (Thaw)
-and 07 (discoveries) both hang off Heat income, and tuning them on top of a curve that does
-not compound would mean redoing that work.
+**The economy question is now the only thing worth doing next.** Every mechanic through Phase
+06 is built, secure, and verified; three separate pacing targets miss by two to four orders of
+magnitude for one shared reason. Phase 07 (discoveries and their rarity weighting) would be
+the fourth system tuned against a curve that does not compound.
 
-1. **Decide the economy question.** The four options are recorded under the Phase 04 and 05
-   balance findings. The clearest single change is making effect growth exceed cost growth on
-   at least one track so a compounding route exists.
-2. **Play for five minutes and record real timings** for first upgrade, Candle, and Cavern.
-   Every pacing number so far comes from a scripted player, which is a poor proxy.
+1. **Decide the economy question.** Options are recorded under the Phase 04 and 05 findings.
+   The clearest single change is making effect growth exceed cost growth on at least one
+   track, so a compounding route exists at all.
+2. **Play for five minutes and record real timings.** Every pacing number so far comes from a
+   scripted player, which is a poor proxy for how efficiently a human sweeps ice.
 3. **Run a two-player session in the Frozen City** to close the outstanding Phase 05
    performance criterion.
 
-Then run Phase 06 — Thaw prestige and permanent Ember progression.
+Then run Phase 07 — frozen discoveries, rarity, collection index, and chain reactions.
 
-Phase 06 must preserve: the `EnvironmentConfig` production guard, the closed remote schema,
+Phase 07 must preserve: the `EnvironmentConfig` production guard, the closed remote schema,
 one development-only startup line per bootstrap, `Init` never yielding, and gameplay gated on
 `DataService.isLoaded(player)`.
 
-Thaw resets Heat, upgrades, tools, and zones beyond the Backyard, so it must go through
-`PlayerStateService` mutators rather than writing the profile, and must call
-`StatsService.invalidate` and `ZoneService.travel` back to the Backyard afterwards, or the
-player will be standing in a zone they no longer own — which the ZoneService patrol would
-then bounce them out of.
+`ContentConfig.Discoveries` already holds all twenty with zone and rarity, and
+`BalanceConfig.Discovery` holds the rarity weights and `MinCommonWeight`.
+`PlayerStateService.addDiscovery` already validates the key against the catalogue and returns
+whether it was the player's first of that kind, which is what the reveal card needs.
+`StatMath.computeMeltStats` returns a zone-adjusted `Luck` for weighting the roll. Chain
+reactions must award through the same validated path as a normal melt, with the per-event cap
+from `ContentConfig.Chains`.

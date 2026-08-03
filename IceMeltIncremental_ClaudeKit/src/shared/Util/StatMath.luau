@@ -42,7 +42,50 @@ export type MeltStats = {
 	Luck: number,
 	WalkSpeed: number,
 	AutoRate: number,
+	EmberMultiplier: number,
 }
+
+--[[
+	Permanent Heat multiplier from Embers, per docs/03:
+
+	    1 + (TotalEmbers ^ 0.65) * 0.15
+
+	Sub-linear on purpose. A linear multiplier would make the second Thaw trivially
+	skippable by hoarding, whereas an exponent below 1 means each Thaw helps meaningfully
+	while the tenth is not ten times the first.
+]]
+function StatMath.emberMultiplier(embers: number): number
+	local safe = Validate.clampFinite(embers, 0, 1e15)
+	if safe <= 0 then
+		return 1
+	end
+	local balance = BalanceConfig.Thaw
+	return Validate.clampFinite(
+		1 + (safe ^ balance.EmberMultiplierExponent) * balance.EmberMultiplier,
+		1,
+		1e9
+	)
+end
+
+--[[
+	Embers awarded for banking `runHeat`, per docs/03:
+
+	    max(1, floor((RunHeat / BaseRequirement) ^ 0.55))
+
+	Returns 0 below the requirement, so eligibility and award share one definition rather
+	than being checked in two places that could disagree.
+]]
+function StatMath.emberAward(runHeat: number): number
+	local balance = BalanceConfig.Thaw
+	local safe = Validate.clampFinite(runHeat, 0, math.huge - 1)
+	if safe < balance.BaseRequirement then
+		return 0
+	end
+
+	local ratio = safe / balance.BaseRequirement
+	local award = math.floor(ratio ^ balance.EmberExponent)
+	return math.max(1, Validate.clampFinite(award, 1, 1e9))
+end
 
 --[[
 	Applies one upgrade's scaling. Levels are clamped to the configured cap first, so a
@@ -95,7 +138,8 @@ end
 function StatMath.computeMeltStats(
 	upgrades: UpgradeLevels,
 	toolIndex: number,
-	zoneKey: string
+	zoneKey: string,
+	embers: number
 ): MeltStats
 	local tool = StatMath.getTool(toolIndex)
 	local zone = ContentConfig.Zones[zoneKey]
@@ -120,6 +164,7 @@ function StatMath.computeMeltStats(
 		Luck = Validate.clampFinite(luck * zoneLuck, 0, 1e6),
 		WalkSpeed = Validate.clampFinite(speed, 8, 100),
 		AutoRate = Validate.clampFinite(auto, 0, 20),
+		EmberMultiplier = StatMath.emberMultiplier(embers),
 	}
 end
 
@@ -131,7 +176,8 @@ function StatMath.heatForCell(stats: MeltStats, zoneKey: string, critical: boole
 	local zone = ContentConfig.Zones[zoneKey]
 	local base = if zone then zone.Heat else 1
 
-	local heat = base * stats.HeatMultiplier
+	-- Embers multiply Heat income permanently, which is the entire point of a Thaw.
+	local heat = base * stats.HeatMultiplier * stats.EmberMultiplier
 	if critical then
 		heat *= BalanceConfig.Melt.CriticalMultiplier
 	end

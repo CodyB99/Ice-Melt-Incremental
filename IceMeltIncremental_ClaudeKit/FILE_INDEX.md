@@ -62,12 +62,14 @@
 - `src/server/Runtime/RemoteRegistry.luau`
 - `src/server/Runtime/RuntimeContainers.luau`
 - `src/server/Runtime/ServiceRuntime.luau`
+- `src/server/Services/AnalyticsService.luau`
 - `src/server/Services/DataService.luau`
 - `src/server/Services/DevCommandService.luau`
 - `src/server/Services/EconomyService.luau`
 - `src/server/Services/IceFieldService.luau`
 - `src/server/Services/MeltService.luau`
 - `src/server/Services/StatsService.luau`
+- `src/server/Services/ThawService.luau`
 - `src/server/Services/ToolService.luau`
 - `src/server/Services/UpgradeService.luau`
 - `src/server/Services/ZoneService.luau`

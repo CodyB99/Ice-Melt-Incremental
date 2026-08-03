@@ -340,6 +340,54 @@ function PlayerStateService.addDiscovery(player: Player, key: string): boolean
 	return previous == 0
 end
 
+--[[
+	Applies a Thaw reset.
+
+	The reset and retain lists come straight from docs/03 and are written out field by field
+	rather than by clearing and re-adding, so a future profile field is retained by default.
+	Silently wiping something new because a reset function was too clever is how prestige
+	systems destroy player progress.
+
+	    Reset:  Heat, RunHeat, all seven upgrade levels, tools back to the starting tool,
+	            zones back to the starting zone
+	    Retain: Embers, Thaws, LifetimeHeat, Discoveries, RewardState, Settings,
+	            ReceiptHistory, SchemaVersion
+
+	LifetimeHeat is deliberately retained: it is a lifetime counter, and resetting it would
+	make it a run counter under a misleading name.
+]]
+function PlayerStateService.applyThawReset(player: Player, emberAward: number): boolean
+	local profile = DataService.getProfile(player)
+	if not profile then
+		return false
+	end
+	if not Validate.isIntegerInRange(emberAward, 0, GameConfig.Limits.MaxEmbers) then
+		return false
+	end
+
+	profile.Embers =
+		Validate.clampFinite(profile.Embers + emberAward, 0, GameConfig.Limits.MaxEmbers)
+	profile.Thaws += 1
+
+	profile.Heat = 0
+	profile.RunHeat = 0
+
+	for _, key in BalanceConfig.UpgradeOrder do
+		(profile.Upgrades :: any)[key] = 0
+	end
+
+	profile.HighestTool = ContentConfig.StartingToolIndex
+	profile.EquippedTool = ContentConfig.StartingToolIndex
+
+	local zones: { [string]: boolean } = {}
+	zones[ContentConfig.StartingZone] = true
+	profile.UnlockedZones = zones
+
+	DataService.markDirty(player)
+	PlayerStateService.queuePush(player)
+	return true
+end
+
 -- === Handshake =============================================================
 
 local function onClientReady(player: Player)

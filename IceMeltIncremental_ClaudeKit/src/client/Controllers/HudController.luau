@@ -311,6 +311,99 @@ local function buildZonePanel(parent: Instance)
 	end
 end
 
+--[[
+	Thaw panel.
+
+	docs/06 requires the dialogue to say exactly what is lost and what is kept, so both
+	lists are spelled out rather than summarised as "resets your progress". A prestige
+	confirmation that is vague about what it destroys is how players lose trust in a save.
+
+	Confirm is disabled until a preview with a token arrives, so the button cannot be
+	pressed against stale or absent data.
+]]
+local thawSummary: TextLabel? = nil
+local thawDetail: TextLabel? = nil
+local thawConfirm: TextButton? = nil
+local thawToken: string? = nil
+
+local function buildThawPanel(parent: Instance)
+	local frame = makePanel(parent, "Thaw")
+
+	local title = label(frame, "Thaw", 18, COLOR_TEXT)
+	title.Size = UDim2.new(1, 0, 0, 24)
+	title.Font = Enum.Font.GothamBold
+
+	thawSummary = label(frame, "Checking...", 12, COLOR_HEAT);
+	(thawSummary :: TextLabel).Position = UDim2.new(0, 0, 0, 28);
+	(thawSummary :: TextLabel).Size = UDim2.new(1, 0, 0, 44);
+	(thawSummary :: TextLabel).TextWrapped = true
+
+	thawDetail = label(frame, "", 11, COLOR_MUTED);
+	(thawDetail :: TextLabel).Position = UDim2.new(0, 0, 0, 76);
+	(thawDetail :: TextLabel).Size = UDim2.new(1, 0, 0, 168);
+	(thawDetail :: TextLabel).TextWrapped = true;
+	(thawDetail :: TextLabel).TextYAlignment = Enum.TextYAlignment.Top;
+	(thawDetail :: TextLabel).Text = "Resets: Heat, all seven upgrades, every tool back to "
+		.. "the Match, and every zone back to the Frozen Backyard.\n\n"
+		.. "Keeps: Embers, Thaw count, discoveries, settings, rewards, and purchases.\n\n"
+		.. "Embers permanently multiply the Heat you earn."
+
+	local confirm = Instance.new("TextButton")
+	confirm.Size = UDim2.new(1, 0, 0, 46)
+	confirm.Position = UDim2.new(0, 0, 1, -46)
+	confirm.BackgroundColor3 = COLOR_DENY
+	confirm.Font = Enum.Font.GothamBold
+	confirm.TextSize = 14
+	confirm.TextColor3 = COLOR_TEXT
+	confirm.Text = "Not ready"
+	confirm.Parent = frame
+	corner(confirm, 8)
+	confirm.Activated:Connect(function()
+		if thawToken then
+			RemoteAccess.fire(RemoteNames.Name.ConfirmThaw, { Token = thawToken })
+			-- Cleared locally too: the server spends the token on first use, so leaving it
+			-- set would only produce a guaranteed denial on a double tap.
+			thawToken = nil
+			confirm.Text = "Thawing..."
+			confirm.BackgroundColor3 = COLOR_DENY
+		end
+	end)
+	thawConfirm = confirm
+end
+
+--[[
+	Applies a preview pushed by the server. The client never computes eligibility or the
+	award; it renders what it was told.
+]]
+local function applyThawPreview(preview: any)
+	if type(preview) ~= "table" or not thawSummary or not thawConfirm then
+		return
+	end
+
+	thawToken = if type(preview.Token) == "string" then preview.Token else nil
+
+	if preview.Eligible then
+		thawSummary.Text = string.format(
+			"Ready. Banking %s Heat awards %s Embers.\nHeat multiplier %s -> %s",
+			NumberFormatter.abbreviate(preview.RunHeat),
+			NumberFormatter.abbreviate(preview.EmberAward),
+			NumberFormatter.multiplier(preview.CurrentMultiplier),
+			NumberFormatter.multiplier(preview.ProjectedMultiplier)
+		)
+		thawConfirm.Text =
+			string.format("Thaw for %s Embers", NumberFormatter.abbreviate(preview.EmberAward))
+		thawConfirm.BackgroundColor3 = COLOR_AFFORD
+	else
+		thawSummary.Text = string.format(
+			"Not ready. %s of %s run Heat.",
+			NumberFormatter.abbreviate(preview.RunHeat),
+			NumberFormatter.abbreviate(preview.Required)
+		)
+		thawConfirm.Text = "Not ready"
+		thawConfirm.BackgroundColor3 = COLOR_DENY
+	end
+end
+
 -- === Refresh ===============================================================
 
 local function refresh()
@@ -456,6 +549,25 @@ function HudController.Start()
 	buildUpgradePanel(screenGui)
 	buildToolPanel(screenGui)
 	buildZonePanel(screenGui)
+	buildThawPanel(screenGui)
+
+	-- Thaw previews and results arrive on ActionResult.
+	RemoteAccess.connect(RemoteNames.Name.ActionResult, function(result: any)
+		if type(result) ~= "table" then
+			return
+		end
+		if result.Action == "RequestThaw" and result.Preview then
+			applyThawPreview(result.Preview)
+		elseif result.Action == "ConfirmThaw" then
+			thawToken = nil
+			if thawConfirm then
+				thawConfirm.Text = if result.Status == "Ok" then "Thawed" else "Not ready"
+				thawConfirm.BackgroundColor3 = COLOR_DENY
+			end
+			-- Ask again so the panel reflects the post-reset run.
+			RemoteAccess.fire(RemoteNames.Name.RequestThaw)
+		end
+	end)
 
 	-- Right-hand thumb column.
 	local buttonRow = Instance.new("Frame")
@@ -476,10 +588,11 @@ function HudController.Start()
 			{ Name = "Upgrades", Panel = "Upgrades" },
 			{ Name = "Tools", Panel = "Tools" },
 			{ Name = "Zones", Panel = "Zones" },
+			{ Name = "Thaw", Panel = "Thaw" },
 		}
 	do
 		local button = Instance.new("TextButton")
-		button.Size = UDim2.new(0, 118, 1, 0)
+		button.Size = UDim2.new(0, 100, 1, 0)
 		button.BackgroundColor3 = COLOR_PANEL
 		button.Font = Enum.Font.GothamBold
 		button.TextSize = 15
@@ -489,6 +602,11 @@ function HudController.Start()
 		corner(button, 10)
 		button.Activated:Connect(function()
 			togglePanel(entry.Panel)
+			-- Opening the Thaw panel asks for a fresh preview, so what is shown is always
+			-- current rather than whatever the run looked like last time it was opened.
+			if entry.Panel == "Thaw" and panels.Thaw and panels.Thaw.Visible then
+				RemoteAccess.fire(RemoteNames.Name.RequestThaw)
+			end
 		end)
 	end
 

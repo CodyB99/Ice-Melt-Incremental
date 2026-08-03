@@ -43,6 +43,7 @@ local DataService = require(script.Parent:WaitForChild("DataService", 10))
 local IceFieldService = require(script.Parent:WaitForChild("IceFieldService", 10))
 local MeltService = require(script.Parent:WaitForChild("MeltService", 10))
 local PlayerStateService = require(script.Parent:WaitForChild("PlayerStateService", 10))
+local ThawService = require(script.Parent:WaitForChild("ThawService", 10))
 
 local DevCommandService = {
 	Name = "DevCommandService",
@@ -127,6 +128,45 @@ COMMANDS.testDoubleCredit = function(): any
 		ThirdHitCredited = thirdHit,
 		CreditedExactlyOnce = firstHit == true and secondHit == false and thirdHit == false,
 	}
+end
+
+COMMANDS.thawStats = function(): any
+	return ThawService.getStats()
+end
+
+--[[
+	Sets RunHeat directly so the Thaw threshold can be reached without playing for hours.
+	Development only, and it goes through the profile rather than granting Heat, so it does
+	not distort the economy ledger.
+]]
+COMMANDS.setRunHeat = function(userId: any, amount: any): any
+	local player = resolvePlayer(userId)
+	if not player then
+		return "no such player in this server"
+	end
+	if type(amount) ~= "number" then
+		return "amount must be a number"
+	end
+
+	local profile = DataService.getProfile(player)
+	if not profile then
+		return "profile not loaded"
+	end
+
+	profile.RunHeat = amount
+	if profile.LifetimeHeat < amount then
+		profile.LifetimeHeat = amount
+	end
+	DataService.markDirty(player)
+	return { RunHeat = profile.RunHeat }
+end
+
+COMMANDS.thawPreview = function(userId: any): any
+	local player = resolvePlayer(userId)
+	if not player then
+		return "no such player in this server"
+	end
+	return ThawService.preview(player)
 end
 
 COMMANDS.fieldStats = function(zoneKey: any): any

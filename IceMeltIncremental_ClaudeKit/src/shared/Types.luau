@@ -113,6 +113,25 @@ export type DerivedStats = {
 	Luck: number,
 	WalkSpeed: number,
 	AutoRate: number,
+	EmberMultiplier: number,
+}
+
+--[[
+	What a Thaw would award right now, and what it would cost the player.
+
+	The Token is an intent nonce for replay protection, not a promise: the award is always
+	recomputed at confirmation time from live state, so a stale token cannot lock in a
+	larger payout than the player currently deserves.
+]]
+export type ThawPreview = {
+	Eligible: boolean,
+	RunHeat: number,
+	Required: number,
+	EmberAward: number,
+	CurrentEmbers: number,
+	CurrentMultiplier: number,
+	ProjectedMultiplier: number,
+	Token: string?,
 }
 
 --[[

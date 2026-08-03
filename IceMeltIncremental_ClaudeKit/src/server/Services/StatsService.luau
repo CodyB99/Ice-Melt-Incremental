@@ -57,7 +57,8 @@ function StatsService.get(player: Player, zoneKey: string): DerivedStats?
 		return cached
 	end
 
-	local computed = StatMath.computeMeltStats(profile.Upgrades, profile.EquippedTool, zoneKey)
+	local computed =
+		StatMath.computeMeltStats(profile.Upgrades, profile.EquippedTool, zoneKey, profile.Embers)
 	perZone[zoneKey] = computed
 	return computed
 end
@@ -90,6 +91,7 @@ function StatsService.getForDisplay(player: Player, zoneKey: string): DerivedSta
 		Luck = 0,
 		WalkSpeed = 16,
 		AutoRate = 0,
+		EmberMultiplier = 1,
 	}
 end
 
