@@ -28,7 +28,8 @@ local ZONE_LAYOUTS: { [string]: ZoneLayout } = table.freeze({
 		GroundColor = Color3.fromRGB(236, 246, 252),
 		GroundMaterial = Enum.Material.Snow,
 		BoundaryHeight = 40,
-		SignPosition = Vector3.new(-34, 9, -78),
+		-- Offset to the left of the walking line so it never blocks the route to the ice.
+		SignPosition = Vector3.new(-32, 9, -60),
 	}),
 	Cavern = table.freeze({
 		Center = Vector3.new(0, 0, 400),
@@ -50,7 +51,7 @@ local ZONE_LAYOUTS: { [string]: ZoneLayout } = table.freeze({
 
 return table.freeze({
 	-- Bump when the skeleton shape changes so stale geometry is rebuilt, not patched.
-	SkeletonVersion = 2,
+	SkeletonVersion = 3,
 
 	RootName = "IceMelt",
 
@@ -82,9 +83,15 @@ return table.freeze({
 
 	Hub = table.freeze({
 		-- Backyard ground top sits at Y = 2, so a 1-stud spawn pad centres at Y = 2.5.
-		SpawnPosition = Vector3.new(0, 2.5, -100),
+		--
+		-- Distance to the ice matters: the first melt has to happen within five seconds
+		-- (docs/01). The Backyard ice field spans Z = -45 to 45, so spawning at Z = -72
+		-- leaves a ~27 stud walk, under two seconds at base walk speed, and the player is
+		-- already facing the ice.
+		SpawnPosition = Vector3.new(0, 2.5, -72),
 		SpawnLookAt = Vector3.new(0, 2.5, 0),
-		TitleSignPosition = Vector3.new(0, 10, -78),
+		-- Raised so the player walks under it rather than into it on the way to the ice.
+		TitleSignPosition = Vector3.new(0, 12, -60),
 		SignSize = Vector3.new(28, 10, 1),
 		TitleSignSize = Vector3.new(36, 12, 1),
 	}),

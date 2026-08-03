@@ -48,6 +48,9 @@
 - `scripts/start-dev.ps1`
 - `selene.toml`
 - `src/client/Bootstrap.client.luau`
+- `src/client/Controllers/DebugOverlayController.luau`
+- `src/client/Controllers/MeltEffectsController.luau`
+- `src/client/Controllers/MeltInputController.luau`
 - `src/client/Controllers/StateController.luau`
 - `src/client/Runtime/ControllerRuntime.luau`
 - `src/client/Runtime/RemoteAccess.luau`
@@ -59,11 +62,14 @@
 - `src/server/Runtime/ServiceRuntime.luau`
 - `src/server/Services/DataService.luau`
 - `src/server/Services/DevCommandService.luau`
+- `src/server/Services/IceFieldService.luau`
+- `src/server/Services/MeltService.luau`
 - `src/server/Services/PlayerStateService.luau`
 - `src/server/World/WorldSkeleton.luau`
 - `src/shared/Config/BalanceConfig.luau`
 - `src/shared/Config/ContentConfig.luau`
 - `src/shared/Config/DataConfig.luau`
+- `src/shared/Config/IceFieldConfig.luau`
 - `src/shared/Config/EnvironmentConfig.luau`
 - `src/shared/Config/GameConfig.luau`
 - `src/shared/Config/MonetizationConfig.luau`

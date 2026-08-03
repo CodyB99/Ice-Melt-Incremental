@@ -40,6 +40,8 @@ local DataFolder = script.Parent.Parent:WaitForChild("Data", 10)
 local ProfileSchema = require(DataFolder:WaitForChild("ProfileSchema", 10))
 
 local DataService = require(script.Parent:WaitForChild("DataService", 10))
+local IceFieldService = require(script.Parent:WaitForChild("IceFieldService", 10))
+local MeltService = require(script.Parent:WaitForChild("MeltService", 10))
 local PlayerStateService = require(script.Parent:WaitForChild("PlayerStateService", 10))
 
 local DevCommandService = {
@@ -78,6 +80,61 @@ COMMANDS.backend = function(): string
 		GameConfig.Environment,
 		GameConfig.DataStoreName
 	)
+end
+
+--[[
+	Live melt-loop counters from the running MeltService.
+
+	Routed through this BindableFunction on purpose: a command-bar `require` of MeltService
+	returns a fresh module instance whose counters are all zero, which silently produces
+	nonsense in a test.
+]]
+COMMANDS.meltStats = function(): any
+	return MeltService.getStats()
+end
+
+--[[
+	The invariant that makes two players sharing one field safe: a cell can be credited to
+	exactly one destroyer. damageCell returns true only on the Alive -> dead transition, so
+	a second hit on an already-dead cell awards nothing.
+
+	Worth an explicit test because it is the difference between two players cooperating and
+	two players each being paid for the same ice.
+]]
+COMMANDS.testDoubleCredit = function(): any
+	local cell = nil
+	for id = 1, IceFieldService.countTotal() do
+		local candidate = IceFieldService.getCell(id)
+		if candidate and candidate.Alive then
+			cell = candidate
+			break
+		end
+	end
+
+	if not cell then
+		return "no alive cell available"
+	end
+
+	local overkill = cell.MaxDurability * 10
+	local firstHit = IceFieldService.damageCell(cell, overkill)
+	local secondHit = IceFieldService.damageCell(cell, overkill)
+	local thirdHit = IceFieldService.damageCell(cell, overkill)
+
+	return {
+		CellId = cell.Id,
+		FirstHitCredited = firstHit,
+		SecondHitCredited = secondHit,
+		ThirdHitCredited = thirdHit,
+		CreditedExactlyOnce = firstHit == true and secondHit == false and thirdHit == false,
+	}
+end
+
+COMMANDS.fieldStats = function(zoneKey: any): any
+	return {
+		TotalCells = IceFieldService.countTotal(),
+		AliveCells = IceFieldService.countAlive(),
+		ZoneAlive = if type(zoneKey) == "string" then IceFieldService.countAlive(zoneKey) else nil,
+	}
 end
 
 COMMANDS.get = function(userId: any): any
@@ -129,6 +186,23 @@ COMMANDS.addHeat = function(userId: any, amount: any): any
 		return "amount must be a number"
 	end
 	return PlayerStateService.addHeat(player, amount)
+end
+
+COMMANDS.setUpgrade = function(userId: any, key: any, level: any): any
+	local player = resolvePlayer(userId)
+	if not player then
+		return "no such player in this server"
+	end
+	if type(key) ~= "string" or type(level) ~= "number" then
+		return "usage: setUpgrade(userId, key, level)"
+	end
+
+	local ok = PlayerStateService.setUpgradeLevel(player, key, level)
+	return {
+		Ok = ok,
+		Key = key,
+		Level = PlayerStateService.getUpgradeLevel(player, key),
+	}
 end
 
 COMMANDS.save = function(userId: any): any

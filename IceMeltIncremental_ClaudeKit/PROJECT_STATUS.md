@@ -7,7 +7,7 @@ Updated: 2026-08-02
 - [x] 00 — Repository, Rojo, Studio MCP, and DataModel setup
 - [x] 01 — Shared types, configuration, remotes, and bootstrapping
 - [x] 02 — Player data, session safety, and replicated state
-- [ ] 03 — Ice fields, server-authoritative melt loop, and pooling
+- [x] 03 — Ice fields, server-authoritative melt loop, and pooling
 - [ ] 04 — Heat economy, upgrades, tool progression, and number formatting
 - [ ] 05 — Three zones, gates, world construction, and travel
 - [ ] 06 — Thaw prestige and permanent Ember progression
@@ -148,6 +148,37 @@ early-finishing release could fire the completion signal before the rest were qu
 Players are counted first now. And a brand-new player no longer logs a spurious "profile
 was nil, replaced with defaults" repair, which would bury real corruption in join noise.
 
+### Phase 03 evidence
+
+Run 2026-08-02 in Studio play mode against `DataStore(IceMelt_PlayerData_DEV_v1)`.
+
+| Phase | Command / test | Result |
+|---|---|---|
+| 03 | `stylua`, `selene`, `rojo build`, `luau-lsp analyze` | **Pass**, all exit 0 |
+| 03 | Ice field built from configuration | **Pass** — 768 cells (3 zones x 256), pooled at startup |
+| 03 | First melt within five seconds | **Pass** — **1.98s**, measured by walking the character from the spawn pad into the field and timing the first destroyed cell, travel included |
+| 03 | Heat only changes through server mutations | **Pass** — client Heat exactly equalled the server's granted total. The melt payload contains only a sequence number, so there is no position, zone, target, or amount for a client to forge |
+| 03 | Remote spam is rate limited | **Pass** — 200 pulses fired in a tight loop produced 12 accepted, exactly the token bucket capacity |
+| 03 | Replayed sequence rejected | **Pass** — reusing an old sequence produced no result |
+| 03 | Malformed payloads rejected | **Pass** — non-table, string sequence, NaN, negative, and infinite sequence all ignored |
+| 03 | Impossible position rejected | **Pass** — standing outside every zone gave 0 accepted, 14 rejected, all `OutOfRange` |
+| 03 | Batch does not become one remote per cell | **Pass** — 54 cells delivered across 4 remotes, max 17 cells in a single remote, average 13.5. One-per-cell would have been 54 |
+| 03 | Cells respawn without instance churn | **Pass** — 256 Backyard cell instances before melting, during melting, and after respawn. Alive count fell to 240 and recovered to 256 |
+| 03 | Melt guard before profile load | **Pass** — pulses before load rejected as `NoProfile`, so no Heat can be granted that a later load would overwrite |
+| 03 | Two-player consistency | **Pass** — Studio multi-client run with 2 players in the shared Backyard field. Both clients rendered both players and the same melted geometry. Heat accrued independently (client overlays read 11 and 52 mid-run; persisted profiles `Player_-1` = 56 and `Player_-2` = 19, with separate save counts). Both clients reported 0 rejections, so concurrent play triggered no false rate-limiting. Both profiles were locked by the same server, as expected for one server holding two players |
+
+Two efficiency problems found and fixed while testing:
+
+1. **The client pulsed ten times a second regardless of position**, including while standing
+   in the hub with no ice within fifty studs. Every one of those was bandwidth plus a
+   server validation for a guaranteed rejection. The client now checks a cheap rectangle
+   test against the zone field bounds plus the maximum possible melt radius before sending.
+   This is a bandwidth optimisation, not a security control: the server still validates
+   every pulse that arrives, and a modified client that ignores it gains only rejections.
+2. **Rejection echoes flooded the Output.** A player standing out of bounds produced one
+   warning per pulse. Echoes are now throttled to one per reason per second, and remain
+   development-only so a live server never tells a client which check it failed.
+
 ## Acceptance criteria — Phase 00
 
 | Criterion | Status |
@@ -197,12 +228,37 @@ was nil, replaced with defaults" repair, which would bury real corruption in joi
 | Full profile and receipt history never replicate to clients | **Met** — allow-listed snapshot, verified on the wire |
 | No production store is touched in Studio | **Met** |
 
+## Acceptance criteria — Phase 03
+
+| Criterion | Status |
+|---|---|
+| First melt occurs within five seconds | **Met** — 1.98s measured from spawn |
+| Heat only changes through server mutations | **Met** |
+| Remote spam and impossible position requests rejected/rate-limited | **Met** |
+| A batch/chain does not generate one remote per cell | **Met** — 54 cells in 4 remotes |
+| Cells respawn without sustained create/destroy churn | **Met** — instance count constant |
+| Two-player test shows consistent authoritative results | **Met** |
+
+## Known limitation: concurrent Studio sessions share a lock identity
+
+The Studio session-lock id is stable per place (`studio-<PlaceId>`), which is what lets a
+restarted play session reclaim its own lock instead of locking the developer out. The
+trade-off is that two Studio sessions running against the same place at the same time —
+for example a multi-client test plus a separate play session — share one identity and will
+each believe they own the profile locks.
+
+Not a live-server concern, since real servers use their own `game.JobId`. In Studio, avoid
+running a second play session while a multi-client test is open.
+
 ## Next action
 
-Run Phase 03 — ice field and the melt vertical slice.
+Run Phase 04 — Heat economy, upgrades, tool progression, and number formatting.
 
-Phase 03 must preserve: the `EnvironmentConfig` production guard, the closed remote schema,
-one development-only startup line per bootstrap, and `Init` never yielding. Gate all
-gameplay on `DataService.isLoaded(player)`; a melt reward granted before the profile loads
-would be written over on the next save. Grant Heat only through
-`PlayerStateService.addHeat`, never by touching a profile table directly.
+Phase 04 must preserve: the `EnvironmentConfig` production guard, the closed remote schema,
+one development-only startup line per bootstrap, `Init` never yielding, and gameplay gated
+on `DataService.isLoaded(player)`.
+
+`StatMath.upgradeCost` already implements the documented cost curve and returns nil at the
+cap; use it rather than recomputing. Spend Heat only through `PlayerStateService.addHeat`
+with a negative amount, and apply levels only through `setUpgradeLevel`, which validates
+against the configured cap. Both already replicate and mark the profile dirty.
